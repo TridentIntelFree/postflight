@@ -20,7 +20,7 @@ const PRESENTATION = {
       'check, it is not what this pull request changed. If this is a fix, it ' +
       'has no test that would have caught the bug.',
   },
-  [OUTCOME.WEAK]: {
+  [OUTCOME.INCONCLUSIVE]: {
     icon: '⚠️',
     title: 'Inconclusive',
     lead: 'The tests could not run against the base commit, so nothing was proven either way.',

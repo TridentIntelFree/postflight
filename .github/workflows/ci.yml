@@ -53,7 +53,7 @@ jobs:
           }
 
           # 1. load errors treated as strong proof
-          sed -i "s|OUTCOME.WEAK, 'load-error'|OUTCOME.RED, 'load-error'|g" src/classify.js
+          sed -i "s|OUTCOME.INCONCLUSIVE, 'load-error'|OUTCOME.RED, 'load-error'|g" src/classify.js
           expect_failure "load-error reported as proof"
 
           # 2. the empty-collection guard removed

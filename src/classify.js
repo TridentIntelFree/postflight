@@ -20,7 +20,7 @@ import { parseJUnit, summarise } from './junit.js';
 
 export const OUTCOME = {
   RED: 'red',
-  WEAK: 'weak',
+  INCONCLUSIVE: 'inconclusive',
   GREEN_ON_BASE: 'green-on-base',
   NOT_APPLICABLE: 'not-applicable',
   ERROR: 'error',
@@ -38,6 +38,11 @@ const LOAD_ERROR_MARKERS = [
   // JS / TS
   /Cannot find module/i, /Cannot find name/i, /\bERR_MODULE_NOT_FOUND\b/,
   /error TS\d+/, /Must use import to load ES Module/i,
+  // Node ESM's wording when a named export is missing — the single most
+  // likely way a test meets a base commit that lacks the code it imports.
+  // Found by running the action, not by reasoning about it: the markers
+  // above were written from assumption and all missed this.
+  /does not provide an export named/, /\bERR_UNKNOWN_FILE_EXTENSION\b/,
   // Go
   /undefined: /, /cannot find package/i, /\[build failed\]/i,
   // Java / Kotlin
@@ -84,7 +89,7 @@ export function classify(run, junitXml) {
         return verdict(OUTCOME.RED, 'assertion', s, junitEvidence(s.failures));
       }
       if (s.hasLoadError) {
-        return verdict(OUTCOME.WEAK, 'load-error', s, junitEvidence(s.errors));
+        return verdict(OUTCOME.INCONCLUSIVE, 'load-error', s, junitEvidence(s.errors));
       }
       return verdict(OUTCOME.GREEN_ON_BASE, 'passed', s, '');
     }
@@ -98,7 +103,7 @@ export function classify(run, junitXml) {
     // Guard against a runner that exits 0 having collected no tests at all —
     // that is not the suite passing, it is the suite not running.
     if (/no tests ran|collected 0 items|0 passing|no test files/i.test(output)) {
-      return verdict(OUTCOME.WEAK, 'no-tests-collected', null,
+      return verdict(OUTCOME.INCONCLUSIVE, 'no-tests-collected', null,
         'The runner exited successfully but reported running no tests.');
     }
     return verdict(OUTCOME.GREEN_ON_BASE, 'passed', null, '');
@@ -111,12 +116,12 @@ export function classify(run, junitXml) {
 
   const loadError = LOAD_ERROR_MARKERS.find((re) => re.test(output));
   if (loadError) {
-    return verdict(OUTCOME.WEAK, 'load-error', null, excerpt(output, loadError));
+    return verdict(OUTCOME.INCONCLUSIVE, 'load-error', null, excerpt(output, loadError));
   }
 
   // Non-zero exit, nothing recognisable. Say so rather than pick a side:
   // claiming proof we do not have is the one failure this tool must not have.
-  return verdict(OUTCOME.WEAK, 'unrecognised', null, excerpt(output));
+  return verdict(OUTCOME.INCONCLUSIVE, 'unrecognised', null, excerpt(output));
 }
 
 function verdict(outcome, reason, junit, evidence) {

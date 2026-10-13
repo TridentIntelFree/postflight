@@ -68,7 +68,7 @@ inputs:
     required: false
     default: 'fail'
 
-  on-unrunnable:
+  on-inconclusive:
     description: |
       What to do when the tests cannot execute against base at all, usually
       because they reference code the pull request introduces. That is
@@ -91,11 +91,16 @@ inputs:
 
 outputs:
   outcome:
-    description: 'One of: red, green-on-base, unrunnable, not-applicable, error.'
+    description: 'One of: red, inconclusive, green-on-base, not-applicable, error.'
+    # Composite outputs are not wired up implicitly: without an explicit
+    # `value` they resolve to the empty string, silently.
+    value: ${{ steps.redgreen.outputs.outcome }}
   tested-files:
     description: Newline-separated test files that were evaluated.
+    value: ${{ steps.redgreen.outputs.tested-files }}
   report:
     description: The full result as Markdown.
+    value: ${{ steps.redgreen.outputs.report }}
 
 runs:
   using: composite
@@ -112,6 +117,6 @@ runs:
         INPUT_LINK_PATHS: ${{ inputs.link-paths }}
         INPUT_BASE: ${{ inputs.base }}
         INPUT_ON_GREEN: ${{ inputs.on-green }}
-        INPUT_ON_UNRUNNABLE: ${{ inputs.on-unrunnable }}
+        INPUT_ON_INCONCLUSIVE: ${{ inputs.on-inconclusive }}
         INPUT_COMMENT: ${{ inputs.comment }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}

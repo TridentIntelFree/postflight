@@ -75,7 +75,19 @@ test('classify: an import error on base proves nothing', () => {
     exitCode: 1,
     output: 'ModuleNotFoundError: No module named "app.divide"',
   });
-  assert.equal(v.outcome, OUTCOME.WEAK);
+  assert.equal(v.outcome, OUTCOME.INCONCLUSIVE);
+  assert.equal(v.reason, 'load-error');
+});
+
+test('classify: a missing ESM named export is a load error', () => {
+  // Node's actual wording, captured by running the action against a base
+  // commit that lacked the imported function. The hand-written markers all
+  // missed it, and only the catch-all kept the verdict honest.
+  const v = classify({
+    exitCode: 1,
+    output: "SyntaxError: The requested module '../src/calc.js' does not provide an export named 'modulo'",
+  });
+  assert.equal(v.outcome, OUTCOME.INCONCLUSIVE);
   assert.equal(v.reason, 'load-error');
 });
 
@@ -88,7 +100,7 @@ test('classify: exit 0 having collected nothing is not a pass', () => {
   // A runner handed a file it cannot collect may exit 0. Calling that
   // "passed on base" would report a false finding against the author.
   const v = classify({ exitCode: 0, output: 'collected 0 items\n\nno tests ran in 0.01s' });
-  assert.equal(v.outcome, OUTCOME.WEAK);
+  assert.equal(v.outcome, OUTCOME.INCONCLUSIVE);
   assert.equal(v.reason, 'no-tests-collected');
 });
 
@@ -107,6 +119,6 @@ test('classify: assertion wins when a run has both', () => {
 
 test('classify: an unrecognised failure is not reported as proof', () => {
   const v = classify({ exitCode: 137, output: 'Killed' });
-  assert.equal(v.outcome, OUTCOME.WEAK);
+  assert.equal(v.outcome, OUTCOME.INCONCLUSIVE);
   assert.equal(v.reason, 'unrecognised');
 });

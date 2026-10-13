@@ -74,7 +74,7 @@ Claiming proof it doesn't have is the one failure this tool must not have.
 | `setup-command` | — | Run in the base worktree before the tests. |
 | `link-paths` | `node_modules` | Reuse an installed dependency tree instead of rebuilding it. |
 | `on-green` | `fail` | What to do when tests pass on base: `fail`, `warn`, `pass`. |
-| `on-unrunnable` | `pass` | What to do when they can't run on base. |
+| `on-inconclusive` | `pass` | What to do when they can't run on base. |
 | `comment` | `true` | Post the result to the PR, updating in place. |
 | `base` | PR base | Override the comparison point. |
 

@@ -103,7 +103,7 @@ async function main() {
 
 function policyFor(outcome) {
   if (outcome === OUTCOME.GREEN_ON_BASE) return input('on-green', POLICY.fail);
-  if (outcome === OUTCOME.WEAK) return input('on-unrunnable', POLICY.pass);
+  if (outcome === OUTCOME.INCONCLUSIVE) return input('on-inconclusive', POLICY.pass);
   return POLICY.pass;
 }
 
