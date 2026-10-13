@@ -1,0 +1,13 @@
+{"Time":"2026-10-13T13:19:05.783767936Z","Action":"start","Package":"gt"}
+{"Time":"2026-10-13T13:19:05.7861142Z","Action":"run","Package":"gt","Test":"TestPasses"}
+{"Time":"2026-10-13T13:19:05.7861369Z","Action":"output","Package":"gt","Test":"TestPasses","Output":"=== RUN   TestPasses\n"}
+{"Time":"2026-10-13T13:19:05.786171712Z","Action":"output","Package":"gt","Test":"TestPasses","Output":"--- PASS: TestPasses (0.00s)\n"}
+{"Time":"2026-10-13T13:19:05.786175595Z","Action":"pass","Package":"gt","Test":"TestPasses","Elapsed":0}
+{"Time":"2026-10-13T13:19:05.786181271Z","Action":"run","Package":"gt","Test":"TestFailsAssertion"}
+{"Time":"2026-10-13T13:19:05.786182969Z","Action":"output","Package":"gt","Test":"TestFailsAssertion","Output":"=== RUN   TestFailsAssertion\n"}
+{"Time":"2026-10-13T13:19:05.786186792Z","Action":"output","Package":"gt","Test":"TestFailsAssertion","Output":"    a_test.go:6: want 3, got 2\n"}
+{"Time":"2026-10-13T13:19:05.786192774Z","Action":"output","Package":"gt","Test":"TestFailsAssertion","Output":"--- FAIL: TestFailsAssertion (0.00s)\n"}
+{"Time":"2026-10-13T13:19:05.786203551Z","Action":"fail","Package":"gt","Test":"TestFailsAssertion","Elapsed":0}
+{"Time":"2026-10-13T13:19:05.786207215Z","Action":"output","Package":"gt","Output":"FAIL\n"}
+{"Time":"2026-10-13T13:19:05.786516843Z","Action":"output","Package":"gt","Output":"FAIL\tgt\t0.002s\n"}
+{"Time":"2026-10-13T13:19:05.786553582Z","Action":"fail","Package":"gt","Elapsed":0.003}

@@ -183,3 +183,57 @@ package), go, cargo, node:test, rspec — are declared `junit: false` rather tha
 left absent, and postflight says so in the log. Those fall back to output
 heuristics, which is the fragile path and should be treated as the next thing
 to fix.
+
+---
+
+## 2026-10-13 — structured output for node:test and Go (roadmap item 3)
+
+Two runners previously fell back to reading prose. Both turned out to have
+structured output that was simply not being used.
+
+**node:test** has had a JUnit reporter since Node 20
+(`--test-reporter=junit --test-reporter-destination=<file>`). It can emit the
+report to a file and the human-readable spec output to stdout at the same
+time, so nothing is lost. `junit: false` -> `junit: postflight-report.xml`.
+
+**Go** has no JUnit reporter but `go test -json` is an event stream, which is
+better than a report for this purpose: it gives per-test results *and* keeps
+build failures at the package level, where they cannot be mistaken for a test
+that ran and disagreed. `src/gotest.js` converts it to the same case shape the
+JUnit parser produces, so nothing downstream knows the difference.
+
+### Verified against real captured output
+
+The fixtures in `test/fixtures/` are real `go test -json` streams, produced by
+compiling and running actual Go code. They are committed deliberately: every
+heuristic bug this project has had came from *imagining* a runner's output
+instead of looking at it.
+
+| Input | Parsed as |
+|---|---|
+| test ran and failed | `failure`, message `a_test.go:6: want 3, got 2` |
+| package did not compile | `error`, message `undefined: undefinedFunction` |
+| not a json stream | `null`, so the caller falls back |
+
+Go reports compile problems as `build-output` / `build-fail` actions, not as
+ordinary output. Inferring the build failure from a later `[build failed]`
+line worked but reported a useless banner as the message; handling the actions
+explicitly surfaces the actual compile error.
+
+### End-to-end, zero configuration
+
+A node:test repo with a real fix and two added tests, no `test-command` set:
+
+```
+Detected node-test; running: node --test --test-reporter=junit …
+| ✅ | rejects divide by zero | failed — captures the change |
+| ⚠️ | still divides evenly   | passed — proves nothing     |
+```
+
+No regressions: express and click both unchanged (0 verdict differences).
+
+### Remaining on heuristics
+
+jest (needs the separate jest-junit package), cargo and rspec. jest is the
+most used of the three and so the most worth solving; `--json --outputFile`
+is structured but is not JUnit, so it needs its own small parser like Go's.

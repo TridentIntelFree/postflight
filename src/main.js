@@ -139,6 +139,7 @@ async function main() {
       }
     }
 
+    const junitPaths = listInput('junit-paths', ['.']);
     const startedAt = Date.now();
     log.info(`Running the touched tests against base ${baseSha.slice(0, 8)}…`);
     const run = await runTests({
@@ -147,13 +148,14 @@ async function main() {
       cwd: built.worktree,
     });
 
-    const junitXml = await collectJUnit(
-      listInput('junit-paths', ['.']),
-      built.worktree,
-      startedAt
-    );
+    // A runner that emits its own structured stream is read directly; one
+    // that writes JUnit has its report collected. Either way the result
+    // arrives in the same shape and nothing downstream cares which.
+    const report = runner?.parse
+      ? (runner.parse(run.output) ?? await collectJUnit(junitPaths, built.worktree, startedAt))
+      : await collectJUnit(junitPaths, built.worktree, startedAt);
 
-    let verdict = classify(run, junitXml, addedNames);
+    let verdict = classify(run, report, addedNames);
 
     // Confirm a claim of proof before making it. A flaky test fails on base
     // too, and crediting that as evidence is the most damaging thing this
@@ -170,10 +172,10 @@ async function main() {
           cwd: built.worktree,
           echo: false,
         });
-        const againXml = await collectJUnit(
-          listInput('junit-paths', ['.']), built.worktree, startedAt
-        );
-        const repeat = classify(again, againXml, addedNames);
+        const againReport = runner?.parse
+          ? (runner.parse(again.output) ?? await collectJUnit(junitPaths, built.worktree, startedAt))
+          : await collectJUnit(junitPaths, built.worktree, startedAt);
+        const repeat = classify(again, againReport, addedNames);
         if (repeat.outcome !== OUTCOME.RED) {
           log.warn('The base failure did not reproduce — treating it as flaky.');
           verdict = {

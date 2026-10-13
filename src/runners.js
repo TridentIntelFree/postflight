@@ -13,6 +13,7 @@
 // of something a user has to know to ask for.
 
 import { readFile, access } from 'node:fs/promises';
+import { parseGoJson } from './gotest.js';
 import { join } from 'node:path';
 
 const REPORT = 'postflight-report.xml';
@@ -56,8 +57,12 @@ const RUNNERS = {
     filter: (names) => `--grep ${quote(names.join('|'))}`,
   },
   'node-test': {
-    command: 'node --test {files}',
-    junit: false,
+    // Node's own JUnit reporter, available since Node 20. Writing it to a
+    // file keeps the human-readable output on stdout.
+    command:
+      `node --test --test-reporter=junit --test-reporter-destination=${REPORT} ` +
+      '--test-reporter=spec --test-reporter-destination=stdout {files}',
+    junit: REPORT,
     filter: (names) => `--test-name-pattern ${quote(names.join('|'))}`,
   },
   pytest: {
@@ -66,9 +71,13 @@ const RUNNERS = {
     filter: (names) => `-k ${quote(names.join(' or '))}`,
   },
   go: {
-    // `go test` takes packages, not files, and has no JUnit output.
-    command: 'go test ./...',
+    // `go test` takes packages, not files. It has no JUnit reporter, but its
+    // event stream is structured, which is better: it says per test what
+    // happened, and keeps build failures at the package level where they
+    // cannot be mistaken for a test that ran and disagreed.
+    command: 'go test -json ./...',
     junit: false,
+    parse: parseGoJson,
     filter: (names) => `-run ${quote(`^(${names.join('|')})$`)}`,
   },
   cargo: {
