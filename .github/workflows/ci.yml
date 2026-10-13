@@ -19,13 +19,21 @@ jobs:
           node-version: 20
       - run: npm test
 
-  # Mutation check: the suite must actually fail when the classifier is wrong.
+  # Mutation check: the suite must actually fail when the tool is wrong.
   #
   # This is the project's own thesis applied to itself. Every assertion in
-  # test/classify.test.js passes today; that alone proves nothing, so each
-  # mutation below breaks one real behaviour and the run fails if the suite
-  # does not notice. Mutation 1 is the exact trap documented in
-  # charlieanna/autocode#299 — treating a load error as proof.
+  # test/ passes today; that alone proves nothing, so each mutation below
+  # breaks one real behaviour and the run fails if the suite does not notice.
+  # Mutation 1 is the exact trap documented in charlieanna/autocode#299 —
+  # treating a load error as proof.
+  #
+  # A mutation that does not APPLY is also a failure, and that is not
+  # pedantry. Mutation 3 used to target `if (junitXml) {`, which was renamed
+  # to `hasReport` when classify() learned to accept parsed cases. The sed
+  # then matched nothing for four pull requests: the source was untouched, the
+  # suite passed, and the job reported "survived" — red for the wrong reason
+  # while silently checking nothing at all. A mutation harness that decays
+  # quietly as the code moves is worse than none, because it is trusted.
   mutation:
     runs-on: ubuntu-latest
     steps:
@@ -34,37 +42,54 @@ jobs:
         with:
           node-version: 20
 
-      - name: A broken classifier must turn the suite red
+      - name: Breaking the tool must turn the suite red
         run: |
           set -euo pipefail
-          cp src/classify.js /tmp/classify.orig
+          mkdir -p /tmp/pristine && cp src/*.js /tmp/pristine/
+          restore() { cp /tmp/pristine/*.js src/; }
 
           expect_failure() {
-            local label="$1"
+            local label="$1" file="$2"
+            if cmp -s "$file" "/tmp/pristine/$(basename "$file")"; then
+              echo "::error::Mutation did not apply: $label"
+              echo "The pattern matched nothing, so this mutation tested nothing."
+              echo "It needs updating to the current source — a mutation that"
+              echo "quietly stops applying is a check that quietly stops checking."
+              restore; exit 1
+            fi
             if npm test >/tmp/out 2>&1; then
               echo "::error::Mutation survived: $label"
               echo "The test suite passed against deliberately broken code, so it"
               echo "is not testing what it claims to test."
-              cp /tmp/classify.orig src/classify.js
-              exit 1
+              restore; exit 1
             fi
             echo "  caught: $label"
-            cp /tmp/classify.orig src/classify.js
+            restore
           }
 
           # 1. load errors treated as strong proof
           sed -i "s|OUTCOME.INCONCLUSIVE, 'load-error'|OUTCOME.RED, 'load-error'|g" src/classify.js
-          expect_failure "load-error reported as proof"
+          expect_failure "load-error reported as proof" src/classify.js
 
           # 2. the empty-collection guard removed
           perl -0pi -e "s/if \(\/no tests ran.*?\n    \}\n//s" src/classify.js
-          expect_failure "exit-0-with-no-tests reported as a pass"
+          expect_failure "exit-0-with-no-tests reported as a pass" src/classify.js
 
-          # 3. JUnit evidence ignored in favour of output heuristics
-          sed -i "s|  if (junitXml) {|  if (false) {|" src/classify.js
-          expect_failure "JUnit evidence ignored"
+          # 3. structured evidence ignored in favour of output heuristics
+          sed -i "s|  if (hasReport) {|  if (false) {|" src/classify.js
+          expect_failure "structured evidence ignored" src/classify.js
 
-          echo "All mutations caught."
+          # 4. node:test's unattributable file failure read as a real one.
+          #    This is the bug that reported "Proven" for a test that never
+          #    executed, so it is the single most important line to pin.
+          perl -0pi -e "s/\n *if \(neverRan\(.*?\n//s" src/junit.js
+          expect_failure "node:test import failure read as proof" src/junit.js
+
+          # 5. dependency drift blamed with no evidence for it
+          sed -i 's|  return dependencyDiff.some((l) => re.test(l));|  return true;|' src/diagnose.js
+          expect_failure "drift blamed without evidence" src/diagnose.js
+
+          echo "All mutations applied and were caught."
 
       - name: Working tree restored
         run: git diff --exit-code

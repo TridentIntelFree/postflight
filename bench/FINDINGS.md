@@ -328,3 +328,222 @@ to save 2% would trade the safety net for noise.
 could import them and so nothing could test them. Moved to `cases.js`.
 Mutating them both — accepting every filter miss, and confusing a failure
 with an error — turns the suite red.
+
+---
+
+## 2026-10-13 — diagnosing *why* a test could not run on base
+
+Started as "handle dependency drift". Measuring first changed the shape of
+it: only 3 of 6 inconclusive commits touched a dependency file at all, and
+diagnosing one that did not (click `22177f857`) turned up
+`ModuleNotFoundError: No module named 'typing_extensions'` — a dev dependency
+missing from the benchmark venv. Not drift. So the gap was broader than the
+feature: **every load error said the same unhelpful thing**, whether the cause
+was a missing package, a real drift, or the benign case where a test imports
+code the pull request introduces.
+
+Four reasons now, in precedence order (`src/diagnose.js`):
+
+```
+references-new-code   benign; reported as "➖ Nothing to prove yet"
+dependency-drift      the PR moves the package that went missing
+missing-dependency    absent from the base worktree, in either commit
+unknown               reported unchanged rather than guessed at
+```
+
+### The precision that mattered, and it was not the one expected
+
+The first version called it drift whenever a manifest changed. Measured
+against express that was **wrong 3 times out of 7** — in every case the
+manifest moved a *different* package than the one that went missing:
+
+| commit | missing | manifest actually moved |
+|---|---|---|
+| `e5feb9fcc` | `utils-merge` | `merge-descriptors` |
+| `4d713d2b7` | `utils-merge` | `fresh` |
+| `c96c690dc` | `array-flatten` | `encodeurl` |
+
+All three would have told the author their dependency change was to blame and
+sent them to look at a file that is fine — the exact failure one of this
+module's own unit tests warns about, showing up in real data within an hour.
+Drift now requires the missing name to appear in the dependency diff, with `-`
+and `_` treated as interchangeable (`typing_extensions` / `typing-extensions`).
+
+Where the evidence is there, it is kept: click `3b16957cb` ("Make typing work
+without runtime `typing_extensions`") *removes* that dependency, the matcher
+finds it in the diff, and drift is exactly right. A prediction that it would
+demote was wrong; the tool was right.
+
+Where there is no name to check, drift is still the call — a fresh base
+checkout against head's installed tree is the most common cause in real CI —
+but the wording says so plainly rather than asserting a finding it does not
+have.
+
+### A false "✅ Proven", found by running it end to end
+
+This is the one the unit tests could not catch, and it is the worst thing this
+tool can do.
+
+A two-commit repo: base exports `divide`, the pull request adds `modulo` and a
+test importing it. The file cannot be imported at base. postflight reported:
+
+```
+### ✅ postflight — Proven
+It ran against the unfixed code, observed it, and disagreed
+```
+
+**node:test's JUnit reporter never emits `<error>`.** A file that failed to
+import comes out as a `<failure type="testCodeFailure">` named after the file:
+
+```xml
+<testcase name="test/a.test.js" classname="test" failure="test failed">
+  <failure type="testCodeFailure" message="test failed">
+    [Error: test failed] { code: 'ERR_TEST_FAILURE', cause: 'test failed', … }
+```
+
+Byte-for-byte the shape of a real assertion failure. The JUnit distinction the
+whole tool rests on was simply absent, and `<failure>` was trusted because the
+format is supposed to be the reliable tier.
+
+Corrected in `src/junit.js` on two marks together — the case is named after a
+file, *and* the cause is the bare string `'test failed'` rather than an
+AssertionError. Either alone could misfire; both together are node:test's
+specific shape. The real report is committed as
+`test/fixtures/nodetest-import-failure.xml`, containing an unimportable file
+and a genuine assertion failure in the same run, so the narrowing is pinned
+from both sides.
+
+Verified after the fix, end to end:
+
+- new export + test importing it → `inconclusive (references-new-code)`,
+  "➖ Nothing to prove yet", naming `modulo`
+- real fix + test using only pre-existing exports → `✅ Proven`, per-case
+  table intact
+
+Worth stating: the earlier "end-to-end, zero configuration" node:test demo in
+this log passed because its test failed an *assertion*. It never exercised the
+import-failure path, so the bug sat under a green demo.
+
+### `unrecognised` is diagnosed too
+
+express `f9256ef36` produced `unrecognised` — mocha crashed before starting,
+so there was no report at all. Reporting a runner that never ran as a
+judgement about the author's tests is the same error as the old
+command-not-found bug. Diagnosis now runs on `unrecognised` as well, keeping
+that label when it learns nothing (it is already the more specific of the two).
+
+### No regressions
+
+| | verdict differences |
+|---|---|
+| express (mocha), 29 commits | **0** |
+| click (pytest), 30 commits | **0** |
+
+Outcome distributions unchanged; only the reasons are sharper. 97 tests.
+Every mutation of `diagnose.js` turns the suite red — suppressing
+`references-new-code` (3 fail), dropping the drift name requirement (1),
+removing the `-`/`_` loosening (1), emptying `missingNames` (6), suppressing
+`missing-dependency` (2).
+
+### Still open
+
+- `references-new-code` **never fired across 59 real commits**, and only
+  showed up in a purpose-built repo. Mature projects rarely add a test that
+  imports a brand-new module; they extend existing ones. It is the right
+  behaviour to have, but its value is for new/greenfield work, not for
+  express-shaped history. Do not read the unit tests as evidence it is common.
+- `missing-dependency` advises `link-paths` or `setup-command`. When the cause
+  is actually a *base-era* package (express 4.x needing `array-flatten` while
+  the tree is 5.x), the honest advice is "install as of the base commit".
+  Distinguishing that needs reading the base manifest, which is not done.
+- cargo and rspec are still on output heuristics. node:test was supposedly on
+  the *reliable* tier and still got this wrong, so assume the heuristic tier
+  is worse than it looks.
+- **The lesson to carry forward:** for every runner, test the import-failure
+  path specifically. It is the one case where being wrong produces false
+  proof, and three runners in a row have gotten it wrong in three different
+  ways (mocha writes no report, jest uses an empty `assertionResults`,
+  node:test mislabels it `<failure>`).
+
+---
+
+## 2026-10-13 — the mutation harness had quietly stopped checking
+
+Found by looking at CI instead of trusting it. **The mutation job had been red
+since PR #4, and four pull requests were merged through it**, including by me.
+Self-check was green the whole time, which made the red easy to wave at.
+
+The cause is worse than a red build. Mutation 3 targeted:
+
+```bash
+sed -i "s|  if (junitXml) {|  if (false) {|" src/classify.js
+```
+
+`junitXml` was renamed to `hasReport` in PR #5, when `classify()` learned to
+accept already-parsed cases. From that commit on the sed **matched nothing**:
+the source was untouched, the suite passed, and the harness concluded
+"mutation survived". So the job was simultaneously failing CI *and* testing
+nothing — and the property it was supposed to pin (structured evidence
+preferred over output heuristics) had no mutation coverage for four PRs.
+
+A mutation harness that decays silently as the code moves is worse than none,
+because it is trusted. **A mutation that does not apply is now a hard
+failure**, with its own message, distinct from one that survives:
+
+```
+::error::Mutation did not apply: <label>
+The pattern matched nothing, so this mutation tested nothing.
+```
+
+Mutations now cover `junit.js` and `diagnose.js` as well as `classify.js` —
+the false-proof bug lived in `junit.js`, which had no mutation coverage at all.
+Five, all verified to apply and to be caught by running the workflow block
+locally rather than pushing and hoping:
+
+```
+caught: load-error reported as proof
+caught: exit-0-with-no-tests reported as a pass
+caught: structured evidence ignored
+caught: node:test import failure read as proof
+caught: drift blamed without evidence
+```
+
+### What probing node:test revealed about yesterday's fix
+
+A sixth mutation — widening the filename check in `neverRan()` to always true
+— **survived**, which sent me to find out what `cause: 'test failed'` really
+means. It is not "failed to import". It is node:test's catch-all for any
+failure it cannot attribute to a named test. Probed directly, at least three
+things produce a byte-identical entry:
+
+| Shape | Did the code run? |
+|---|---|
+| unimportable file | no — must not count as proof |
+| top-level assertion outside any `test()` | **yes, and it disagreed** |
+| async throw after a test returned | the named test is reported **passed** |
+
+So the correction is conservative, not precise, and the comment in `junit.js`
+claimed something narrower than the truth. Corrected to say what it does.
+
+Reading all three as "could not run" is still right: the bias costs a true
+finding at worst. In practice the second and third cannot reach a verdict
+anyway — neither contributes a name `countAddedTestCases` would count, and the
+async case's own test keeps its reported status. Both are now pinned by
+`test/fixtures/nodetest-unattributable.xml`, including the one that matters
+most: **a test node:test reports as passed must stay passed even when its file
+carries a failure entry.**
+
+The surviving mutation is left out of CI deliberately. No real node:test
+output puts `cause: 'test failed'` on a case not named after a file, so
+catching it would need a fixture invented rather than captured — the exact
+mistake every heuristic bug in this log came from. The code comment says the
+filename check is belt-and-braces rather than an independent guard, which is
+the honest description.
+
+### Lesson
+
+Two in one night, same shape: **a check that passes is not a check that
+works.** The project's whole thesis, found twice in its own CI — once in a
+test that didn't test what it claimed (PR #4), once in a mutation that didn't
+mutate. Verify the harness, not just the result. Run the CI block locally
+before pushing.
