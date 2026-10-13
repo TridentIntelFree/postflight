@@ -63,7 +63,7 @@ requests** — telling authors their tests had teeth when they did not.
 | ❌ **Not proven** | Every touched test also passes on base. Whatever they check, it isn't what this PR changed. |
 | ⚠️ **Inconclusive** | The tests couldn't run on base at all. Nothing proven either way — but postflight says *why*, and one of the reasons isn't a problem. |
 | 🎲 **Not reproducible** | The same test gave two different answers on the same base commit. See [tests that sample](#tests-that-sample-quantum-monte-carlo-property-based). |
-| ➖ **Not applicable** | No test files touched. |
+| ➖ **Not applicable** | No test files touched, or every added case is marked [characterization](#when-a-test-is-deliberately-covering-what-already-works). |
 
 ### "Couldn't run" is four different things
 
@@ -112,6 +112,36 @@ in the log which applies:
 Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is
 the one failure this tool must not have.
+
+### When a test is deliberately covering what already works
+
+A test written for behaviour that already worked is **indistinguishable** from
+an untested fix. No analysis can separate them — and this is not a rare case.
+Of the four pull requests postflight accused across cobra's recent history,
+two were explicitly "add tests for existing functions" commits. The verdict
+was accurate both times, and blocking either would have been wrong.
+
+You know which it is, so say so:
+
+```js
+// postflight: characterization
+test('divides negatives the way it always has', () => { … })
+```
+
+That case is excluded from the verdict. `characterisation`, `ignore` and
+`skip` all work, with `//`, `#`, `--` or `/* */`.
+
+Two rules keep it honest:
+
+- **It is read from the lines your pull request adds**, so the marker has to
+  be part of the change. An existing marker elsewhere in the file cannot
+  silence a new test.
+- **Marked cases are always listed in the report.** A marker that suppresses
+  the check invisibly is a hole in the check, and a reviewer cannot notice
+  what they are not shown.
+
+If every case you add is marked, postflight reports ✓ *Characterization
+tests* and stops — plainly, rather than as a pass it did not earn.
 
 ### Tests that sample: quantum, Monte Carlo, property-based
 

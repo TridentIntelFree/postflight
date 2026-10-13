@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
-import { extractTestNames, coversAny, hasLoadError } from './cases.js';
+import { extractTestNames, characterizationNames, coversAny, hasLoadError } from './cases.js';
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
@@ -99,11 +99,20 @@ async function main() {
   // between a useful finding and three accusations against innocent commits.
   const { added, removed } = await changedLines(baseSha, headSha, files);
   const newCases = countAddedTestCases(added, removed);
-  const addedNames = extractTestNames(added);
+  const allAddedNames = extractTestNames(added);
+
+  // The author can say a test is deliberately characterizing behaviour that
+  // already works, which no analysis can tell from an untested fix. Marked
+  // cases are excluded from the verdict but always REPORTED — a marker that
+  // hides the check would be a hole in the check.
+  const marked = characterizationNames(added);
+  const addedNames = allAddedNames.filter((n) => !marked.includes(n));
+
   log.info(`New test cases added: ${newCases}`);
-  if (addedNames.length) {
+  if (allAddedNames.length) {
     log.group('Cases this pull request adds', () =>
-      addedNames.forEach((n) => log.info(`  ${n}`)));
+      allAddedNames.forEach((n) =>
+        log.info(`  ${n}${marked.includes(n) ? '   [characterization]' : ''}`)));
   }
   if (newCases === 0) {
     return finish({
@@ -112,6 +121,21 @@ async function main() {
       files,
       baseSha,
       headSha,
+    });
+  }
+
+  // Everything this pull request adds is marked, so there is nothing left to
+  // judge. Said plainly rather than reported as a pass, and the names are
+  // listed so the marker is visible to a reviewer.
+  if (addedNames.length === 0 && marked.length > 0) {
+    log.info(`All ${marked.length} added cases are marked as characterization tests.`);
+    return finish({
+      outcome: OUTCOME.NOT_APPLICABLE,
+      reason: 'characterization',
+      files,
+      baseSha,
+      headSha,
+      marked,
     });
   }
 
@@ -353,7 +377,7 @@ async function main() {
       });
     }
 
-    verdict = { ...verdict, determinism };
+    verdict = { ...verdict, determinism, marked };
 
     return finish({
       ...verdict,

@@ -1029,3 +1029,71 @@ every fallback, and a 30% false-accusation rate — none of which are
 Go-specific, and all of which two repos in two languages had hidden for four
 releases. The next repo should be in a language with a compiler and a
 different test-naming convention, for the same reason.
+
+---
+
+## 2026-10-13 — the characterization marker (roadmap item 4)
+
+Built because the cobra audit gave it evidence it did not have before. Two of
+that repo's four accusations are pull requests whose **stated purpose** is
+adding tests for code that already works:
+
+- `0dec88e79` "Add tests for funcs in cobra.go (#2094)"
+- `00b68a1c2` "Add tests for flag completion registration (#2053)"
+
+`green-on-base` is accurate for both, and blocking either would be wrong.
+That is 50% of this repo's accusations, where before it was one express
+commit. The intent problem cannot be solved by analysis — a test written for
+behaviour that already worked is indistinguishable from an untested fix — but
+the author knows, so let them say.
+
+```js
+// postflight: characterization
+test('divides negatives the way it always has', () => { … })
+```
+
+Accepts `characterisation`, `ignore`, `skip`, with `//`, `#`, `--`, `/* */`.
+Applies to the nearest declaration within three lines, covering the three
+places people write it: above, on the same line, first line of the body.
+
+### Two rules that stop it being a hole
+
+- **Read from the lines the pull request ADDS.** An existing marker elsewhere
+  in the file cannot silence a new test; the marker has to be part of the
+  change under review.
+- **Marked cases are always reported**, and the verdict is named
+  `not-applicable (characterization)` rather than dressed up as a pass. A
+  marker that suppresses the check invisibly is worse than no marker, because
+  a reviewer cannot notice what they are not shown.
+
+### Mutation found a gap the tests had papered over
+
+Deleting the ±3 line window **survived the whole suite**. The reason is
+instructive: every test in `markers.test.js` had a declaration close by, so
+"nearest declaration wins" made the window redundant in all of them. The
+property the window actually enforces is different — a marker written
+*anywhere* in the diff, in a docstring or an unrelated comment block, must not
+silence whichever test happens to be closest 20 lines away. Written, caught,
+and added to CI.
+
+That is the third time a passing test in this project turned out not to test
+what it claimed, and the third time mutation caught it rather than reading.
+
+### Verified
+
+End to end on a real node:test repo, both shapes:
+
+| Pull request | Verdict |
+|---|---|
+| real fix + one marked case | `red` — the real case drives it, marked one listed `[characterization]` |
+| two marked cases, nothing else | `✓ not-applicable (characterization)` |
+
+express (29), click (30), cobra (30): **0 verdict and 0 reason differences.**
+154 tests, 14 mutations in CI.
+
+### Note on what this does not do
+
+It does not detect intent, and it should not pretend to. A project that wants
+whole directories exempt still has to mark each case or pass a narrower
+`test-pattern`; a `characterization-paths` input was considered and left out
+rather than shipped untested.

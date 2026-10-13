@@ -140,6 +140,13 @@ jobs:
           sed -i "s|const repeat = await rerun(command);|const repeat = await rerun('other');|" src/confirm.js
           expect_failure "confirmation re-runs a different command" src/confirm.js
 
+          # 14. the characterization marker silencing more than its own
+          #     test. A marker that suppresses the check invisibly is a hole
+          #     in the check, and this is the direction that matters: too
+          #     eager, not too shy.
+          sed -i 's|      if (distance < -3 .. distance > 3) continue;||' src/cases.js
+          expect_failure "characterization marker leaks to distant tests" src/cases.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored

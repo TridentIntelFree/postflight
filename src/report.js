@@ -68,6 +68,22 @@ export function buildReport(result) {
     };
   }
 
+  // not-applicable otherwise explains that nothing was added, which is the
+  // wrong story for a pull request that added tests and said what they are.
+  if (result.reason === 'characterization') {
+    p = {
+      ...p,
+      icon: '\u2713',
+      title: 'Characterization tests',
+      lead: 'Every test this pull request adds is marked as characterizing existing behaviour.',
+      detail:
+        'So there is nothing for this check to prove, and that is the ' +
+        'author\u2019s call rather than a judgement: a test written for ' +
+        'behaviour that already works is indistinguishable from an untested ' +
+        'fix, and only the author knows which it is.',
+    };
+  }
+
   // "Inconclusive" otherwise explains a load error, which is the wrong story
   // for a result that ran fine twice and disagreed with itself.
   if (result.reason === 'not-reproducible') {
@@ -125,6 +141,18 @@ export function buildReport(result) {
   if (result.diagnosis) {
     lines.push('');
     lines.push(result.diagnosis.explanation);
+  }
+
+  // Marked cases are excluded from the verdict, so they have to be named.
+  // A marker that silently suppresses the check is a hole in the check, and
+  // a reviewer cannot notice what they are not shown.
+  if (result.marked?.length) {
+    const n = result.marked.length;
+    lines.push('');
+    lines.push(`${n === 1 ? 'One case is' : `${n} cases are`} marked ` +
+      '`postflight: characterization` and excluded from the verdict:');
+    lines.push('');
+    for (const name of result.marked) lines.push(`- \`${name}\``);
   }
 
   // A sampled, unseeded test makes everything above probabilistic, so say so
