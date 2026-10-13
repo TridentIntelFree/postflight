@@ -79,3 +79,61 @@ A rate is not evidence. These were read by hand:
   answer this and reduce the noise at once.
 - No runner beyond mocha and pytest has ever been tried. Both broke on first
   contact. Assume the next one will too.
+
+---
+
+## 2026-10-13 — per-test-case verdicts (roadmap item 1)
+
+The verdict used to be about the whole test FILE: any test in a touched file
+failing on base made the pull request "proven". That is both imprecise and
+**wrong**, because it credits the author for tests they did not write.
+
+Now the verdict is about the cases the pull request actually adds. Names are
+extracted from the diff (`src/cases.js`) and matched against per-case JUnit
+results; when nothing matches, it falls back to file-level rather than
+inventing a verdict.
+
+### Measured
+
+**express (mocha), 24 commits:** no verdict changed, **0 unmatched names**.
+Where file-level was already right, per-case agrees exactly. This is the
+control, and it is the reason to believe the click numbers below.
+
+**click (pytest), 29 commits:** 7 verdicts changed, all `red` -> `green-on-base`.
+
+```
+red             8  ->  1
+green-on-base  13  -> 20
+```
+
+Every one of those seven was a **false credit**. Verified by hand:
+
+- `1f9cd54f6` "Close the pager temp file before unlinking it" adds exactly one
+  test, `test_tempfile_pager_closes_file_before_unlink`, which PASSES on base.
+  The two tests that failed on base are pre-existing and unrelated. File-level
+  scoring told the author their test had teeth when it did not.
+- `3495fba16` "Warn when an argument name collides" adds five tests, all of
+  which pass on base. Confirmed independently by building the base worktree by
+  hand and running pytest directly, rather than trusting postflight's own
+  matcher.
+
+So file-level was over-crediting by 7/29 — **24% of pull requests were told
+their tests captured the change when they did not.** That is the worst class
+of error this tool can make, and it was invisible until case-level granularity
+existed to expose it.
+
+### Note on what "passes on base" can mean
+
+`1f9cd54f6` is a Windows-specific bug: you can unlink an open file on Linux,
+so the test cannot fail on a Linux runner no matter how good it is. postflight
+can only prove what the CI platform can observe. The verdict is accurate and
+the cause is the platform, not the test.
+
+### Still open
+
+- Execution is still per FILE; only the verdict is per case. Narrowing the run
+  itself (`pytest -k`, `mocha --grep`) is the remaining half of roadmap item 1
+  and would make it faster, not just more precise.
+- Loose name matching is bidirectional substring. It has not misfired in 53
+  commits (0 unmatched, 0 observed mismatches), but a short test name that is
+  a substring of another could in principle match the wrong case.

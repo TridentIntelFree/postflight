@@ -33,6 +33,21 @@ that had the bug and watch it fail. That is all this does.
 
 ## What it reports
 
+The verdict is about **the test cases your pull request adds**, not the files
+they live in. A PR that adds three tests gets told which of the three actually
+capture the change:
+
+| | Test | On base |
+|---|---|---|
+| ✅ | `rejects divide by zero` | failed — captures the change |
+| ⚠️ | `divides cleanly` | passed — proves nothing |
+
+File-level scoring is not just vaguer, it is wrong: any failure anywhere in a
+touched file credits the pull request, including pre-existing tests the author
+never wrote. Measured against click, that over-credited **24% of pull
+requests** — telling authors their tests had teeth when they did not.
+
+
 | Outcome | Meaning |
 |---|---|
 | ✅ **Proven** | A touched test failed an assertion on base. It ran against the old code, observed it, and disagreed. |
@@ -161,6 +176,8 @@ Worth knowing before you turn it on:
 - **A proven test is not a good test.** It demonstrates the test observes the
   change. It says nothing about whether the change is correct, or whether the
   test covers the important case.
+- **It can only prove what the CI platform can observe.** A fix for a
+  Windows-specific bug cannot fail on a Linux runner however good its test is.
 - **It cannot know intent.** A test added for behaviour that already works
   looks exactly like a fix with no test. This is why the default is advisory.
 - Shallow clones don't work. `fetch-depth: 0`.

@@ -64,6 +64,24 @@ export function buildReport(result) {
   lines.push('');
   lines.push(p.detail);
 
+  // The per-case breakdown is the actionable part: "adds 3, 2 proven, 1
+  // passes on base" tells a reviewer where to look, which a single word never
+  // does. Shown above the file list because it matters more.
+  const c = result.cases;
+  if (c && c.total) {
+    lines.push('');
+    lines.push(`This pull request adds **${c.total}** test ${c.total === 1 ? 'case' : 'cases'}:`);
+    lines.push('');
+    lines.push('| | Test | On base |');
+    lines.push('|---|---|---|');
+    const row = (icon, name, note) =>
+      lines.push(`| ${icon} | \`${String(name).replace(/\|/g, '\\|')}\` | ${note} |`);
+    for (const r of c.proven) row('✅', r.name, 'failed — captures the change');
+    for (const r of c.passed) row('⚠️', r.name, 'passed — proves nothing');
+    for (const r of c.loadErrors) row('⚠️', r.name, 'could not run');
+    for (const r of c.unmatched) row('❔', r.name, 'not found in the report');
+  }
+
   if (result.files?.length) {
     lines.push('');
     lines.push(`<details><summary>Tests evaluated (${result.files.length})</summary>`);
@@ -102,7 +120,16 @@ export function buildReport(result) {
     reason: result.reason ?? null,
     base: result.baseSha?.slice(0, 12) ?? null,
     head: result.headSha?.slice(0, 12) ?? null,
-    testsEvaluated: result.files?.length ?? 0,
+    filesEvaluated: result.files?.length ?? 0,
+    cases: c ? {
+      added: c.total,
+      proven: c.proven.length,
+      passedOnBase: c.passed.length,
+      couldNotRun: c.loadErrors.length,
+      unmatched: c.unmatched.length,
+      provenNames: c.proven.map((r) => r.name),
+      passedOnBaseNames: c.passed.map((r) => r.name),
+    } : null,
   }, null, 2));
   lines.push('```');
 
