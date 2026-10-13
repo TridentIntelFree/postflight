@@ -14,6 +14,7 @@ import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
 import { analyseDeterminism, confirmationsFor } from './nondeterminism.js';
+import { confirmVerdict, shouldConfirm } from './confirm.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -165,12 +166,20 @@ async function main() {
     let startedAt = Date.now();
     let run = null;
     let report = null;
+    // Which command actually produced the verdict. Confirming has to repeat
+    // THAT one: when the narrowed run matched nothing and fell back, the
+    // verdict came from the whole-file run, and re-running the narrowed
+    // command would compare two different things and call the difference
+    // "not reproducible". Measured on cobra, that mislabelled 4 of 30 real
+    // commits before this was tracked.
+    let verdictCommand = null;
 
     if (narrowing) {
       log.info(`Running this pull request's ${addedNames.length} added ` +
         `${addedNames.length === 1 ? 'case' : 'cases'} against base ${baseSha.slice(0, 8)}…`);
       run = await runTests({ command: narrowing, files: built.overlaid, cwd: built.worktree });
       report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+      verdictCommand = narrowing;
     }
 
     // A filter that matched nothing must never stand in for a verdict. Name
@@ -200,6 +209,7 @@ async function main() {
       // that writes JUnit has its report collected. Either way the result
       // arrives in the same shape and nothing downstream cares which.
       report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+      verdictCommand = testCommand;
     }
 
     let verdict = classify(run, report, addedNames);
@@ -324,34 +334,23 @@ async function main() {
     // asymmetry impossible to miss; it was always there.
     const configured = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
     const confirmations = confirmationsFor(determinism.risk, configured);
-    const confirmable = verdict.outcome === OUTCOME.RED
-      || (verdict.outcome === OUTCOME.GREEN_ON_BASE && determinism.risk === 'unseeded');
 
-    if (confirmable && confirmations > 0) {
-      const expected = verdict.outcome;
-      for (let i = 1; i <= confirmations; i++) {
-        log.info(`Confirming the result is reproducible (${i}/${confirmations})…`);
-        const again = await runTests({
-          command: narrowing || testCommand,
-          files: built.overlaid,
-          cwd: built.worktree,
-          echo: false,
-        });
-        const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
-        const repeat = classify(again, againReport, addedNames);
-        if (repeat.outcome !== expected) {
-          log.warn(`The base result did not reproduce (${expected} then ${repeat.outcome}).`);
-          verdict = {
-            outcome: OUTCOME.INCONCLUSIVE,
-            reason: 'not-reproducible',
-            evidence:
-              `The tests reported ${expected} against base on the first run and ` +
-              `${repeat.outcome} on a repeat. A result that does not reproduce is ` +
-              'not evidence either way, in either direction.',
-          };
-          break;
-        }
-      }
+    if (shouldConfirm(verdict.outcome, determinism.risk)) {
+      verdict = await confirmVerdict({
+        verdict,
+        // The command that PRODUCED this verdict, which after a fallback is
+        // not the narrowed one. Passing it explicitly is the point.
+        command: verdictCommand,
+        confirmations,
+        log,
+        rerun: async (command) => {
+          const again = await runTests({
+            command, files: built.overlaid, cwd: built.worktree, echo: false,
+          });
+          const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
+          return classify(again, againReport, addedNames);
+        },
+      });
     }
 
     verdict = { ...verdict, determinism };
