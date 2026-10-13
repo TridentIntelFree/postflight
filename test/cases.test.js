@@ -195,3 +195,41 @@ test('a name with no corresponding case is unmatched', () => {
   assert.equal(r[0].matched, true);
   assert.equal(r[1].matched, false);
 });
+
+// --- narrowing safety ------------------------------------------------------
+//
+// Narrowing runs only the cases a pull request adds. The danger is a filter
+// that matches nothing: the run succeeds, a report exists, and it says
+// nothing about the tests in question. That is indistinguishable from a real
+// result unless something checks, which is what these cover.
+
+import { coversAny, hasLoadError } from '../src/cases.js';
+
+test('coversAny is true when the report includes an added case', () => {
+  const cases = [mk('rejects divide by zero', 'failed', 'failure'), mk('unrelated', 'passed')];
+  assert.equal(coversAny(cases, ['rejects divide by zero']), true);
+});
+
+test('coversAny is false when the filter matched nothing', () => {
+  // The report is full of OTHER tests. Without this check the verdict would
+  // be built from tests the pull request never touched.
+  const cases = [mk('something else entirely', 'passed'), mk('and another', 'passed')];
+  assert.equal(coversAny(cases, ['rejects divide by zero']), false);
+});
+
+test('coversAny is false for an empty report', () => {
+  assert.equal(coversAny([], ['anything']), false);
+});
+
+test('coversAny is false when nothing was added', () => {
+  assert.equal(coversAny([mk('a', 'passed')], []), false);
+});
+
+test('hasLoadError distinguishes never-ran from ran-and-failed', () => {
+  // Decides whether falling back to the whole file could tell us anything
+  // new. A suite that will not load will not load any slower.
+  assert.equal(hasLoadError([mk('a', 'failed', 'error')]), true);
+  assert.equal(hasLoadError([mk('a', 'failed', 'failure')]), false);
+  assert.equal(hasLoadError([mk('a', 'passed')]), false);
+  assert.equal(hasLoadError([]), false);
+});

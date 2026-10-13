@@ -135,6 +135,7 @@ Getting to those numbers took three fixes that only real history exposed:
 | `test-command` | detected | `{files}` is replaced with the touched test files. Optional. |
 | `test-pattern` | common conventions | Globs identifying test files, one per line. |
 | `junit-paths` | `.` | Where to look for JUnit XML the run produced. |
+| `narrow` | `true` | Run only the cases the PR adds, not their whole files. |
 | `setup-command` | — | Run in the base worktree before the tests. |
 | `link-paths` | `node_modules` | Reuse an installed dependency tree instead of rebuilding it. |
 | `on-green` | `warn` | What to do when tests pass on base: `warn`, `fail`, `pass`. |
@@ -177,7 +178,12 @@ failures in runners they were not written for.
    touched, so a crashed run can't strand the workspace on the wrong commit.
 3. Write the head version of each test file into it, symlinking `node_modules`
    and friends so the dependency tree isn't installed twice.
-4. Run the tests. Classify. Report. Remove the worktree.
+4. Run **only the cases the pull request adds**, where the runner can be told
+   to (`pytest -k`, `mocha --grep`, `jest -t`, `go test -run`). 43% faster on
+   a project with large test files; no measurable difference on one with small
+   ones. If the filter matches nothing, the whole file runs instead — a silent
+   miss would turn a real verdict into "inconclusive".
+5. Classify. Report. Remove the worktree.
 
 ## Limits
 

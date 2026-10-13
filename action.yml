@@ -64,6 +64,20 @@ inputs:
     default: |
       .
 
+  narrow:
+    description: |
+      Run only the test cases the pull request adds, where the runner can be
+      told to (`pytest -k`, `mocha --grep`, `jest -t`, `go test -run`, and so
+      on), instead of every test in the files they live in.
+
+      On a large suite this is the difference between a check people keep and
+      one they turn off. If the filter matches nothing — name patterns differ
+      per runner and per project — the whole file is run instead, because a
+      filter that silently missed would turn a real result into
+      "inconclusive" with nobody the wiser.
+    required: false
+    default: 'true'
+
   confirmations:
     description: |
       How many times to repeat a failing base run before reporting it as
@@ -146,6 +160,7 @@ runs:
         INPUT_JUNIT_PATHS: ${{ inputs.junit-paths }}
         INPUT_SETUP_COMMAND: ${{ inputs.setup-command }}
         INPUT_LINK_PATHS: ${{ inputs.link-paths }}
+        INPUT_NARROW: ${{ inputs.narrow }}
         INPUT_CONFIRMATIONS: ${{ inputs.confirmations }}
         INPUT_BASE: ${{ inputs.base }}
         INPUT_ON_GREEN: ${{ inputs.on-green }}

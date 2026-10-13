@@ -183,3 +183,21 @@ export function summariseCases(results) {
     usable: results.length > 0 && unmatched.length < results.length,
   };
 }
+
+/**
+ * Did this report actually cover the cases we asked about?
+ *
+ * Used to tell a successful narrowed run from a filter that silently matched
+ * nothing. The two look identical from the outside — both produce a report —
+ * and mistaking the second for the first turns a real verdict into
+ * "inconclusive" with nobody the wiser.
+ */
+export function coversAny(cases, addedNames) {
+  if (!cases.length || !addedNames.length) return false;
+  return summariseCases(matchCases(addedNames, cases)).usable;
+}
+
+/** Did a test never execute, as opposed to executing and failing? */
+export function hasLoadError(cases) {
+  return cases.some((c) => c.type === 'error');
+}
