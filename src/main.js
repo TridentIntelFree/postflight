@@ -8,6 +8,7 @@
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
 import { extractTestNames } from './cases.js';
+import { detectRunner } from './runners.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -17,8 +18,29 @@ import { buildReport, postComment } from './report.js';
 const POLICY = { fail: 'fail', warn: 'warn', pass: 'pass' };
 
 async function main() {
-  const testCommand = input('test-command');
-  if (!testCommand) throw new Error('`test-command` is required.');
+  // An explicit command always wins; detection only fills the gap.
+  let testCommand = input('test-command');
+  let runner = null;
+  if (!testCommand) {
+    runner = await detectRunner();
+    if (!runner) {
+      throw new Error(
+        'Could not work out how to run this project\'s tests, so `test-command` is required:\n\n' +
+        '    with:\n' +
+        '      test-command: <your runner> {files}\n\n' +
+        'Emit JUnit XML if your runner can — it is the difference between\n' +
+        'reading the result and guessing at it.'
+      );
+    }
+    testCommand = runner.command;
+    log.info(`Detected ${runner.name}; running: ${testCommand}`);
+    if (!runner.junit) {
+      log.info(
+        `${runner.name} has no built-in JUnit report, so results are read from its ` +
+        'output. Set test-command yourself if you can make it write one.'
+      );
+    }
+  }
 
   const event = await eventPayload();
   const pr = event?.pull_request;

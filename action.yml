@@ -19,7 +19,15 @@ inputs:
 
       If `{files}` is absent the command runs as-is, which is fine for runners
       that cannot be scoped to a file list — just slower.
-    required: true
+
+      Optional. Left unset, the runner is detected from the repository
+      (package.json, pyproject.toml, go.mod, Cargo.toml, build.gradle,
+      pom.xml, Gemfile) and told to emit a JUnit report where it can, which is
+      the difference between reading the result and guessing at it. Setting it
+      yourself always wins; detection only fills the gap, and says plainly
+      when it cannot.
+    required: false
+    default: ''
 
   test-pattern:
     description: |

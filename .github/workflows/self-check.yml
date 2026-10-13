@@ -32,7 +32,8 @@ jobs:
       - id: postflight
         uses: ./
         with:
-          test-command: node --test {files}
+          # No test-command: detection must work this repo out for itself.
+          # If it cannot, the self-check fails, which is the point.
           on-green: warn
 
       # Proves the outputs are actually wired. They resolved to empty strings
