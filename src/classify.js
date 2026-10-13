@@ -17,6 +17,7 @@
 //                      this pull request changed.
 
 import { parseJUnit, summarise } from './junit.js';
+import { matchCases, summariseCases } from './cases.js';
 
 export const OUTCOME = {
   RED: 'red',
@@ -78,8 +79,12 @@ const ASSERTION_MARKERS = [
  * @param {number} run.exitCode
  * @param {string} run.output    Combined stdout + stderr.
  * @param {string} [junitXml]    Report content, when the runner produced one.
+ * @param {string[]} [addedNames] Names of the test cases this pull request
+ *   adds. When these can be matched against the report, the verdict is about
+ *   those cases alone — which is both more precise and more correct, since
+ *   scoring the whole file credits the author for tests they did not write.
  */
-export function classify(run, junitXml) {
+export function classify(run, junitXml, addedNames = []) {
   // Before anything else: did the command run at all? A test runner that was
   // never found says nothing about the tests, and reporting "inconclusive"
   // for it hides a setup problem behind a verdict. This is the first wall
@@ -107,7 +112,16 @@ export function classify(run, junitXml) {
   // Structured evidence wins: JUnit XML already separates the two cases, so
   // there is nothing to infer.
   if (junitXml) {
-    const s = summarise(parseJUnit(junitXml));
+    const parsed = parseJUnit(junitXml);
+
+    // Per-case first: a verdict about the cases the pull request actually
+    // added beats one about every test that happens to share their file.
+    if (addedNames.length > 0 && parsed.length > 0) {
+      const perCase = summariseCases(matchCases(addedNames, parsed));
+      if (perCase.usable) return fromCases(perCase);
+    }
+
+    const s = summarise(parsed);
     if (s.total > 0) {
       if (s.hasAssertionFailure) {
         return verdict(OUTCOME.RED, 'assertion', s, junitEvidence(s.failures));
@@ -159,6 +173,42 @@ function isCommandUnavailable(run) {
   const out = run.output || '';
   return /^[^\n]*(?:command not found|: not found|No such file or directory)\s*$/m.test(out)
     && out.split('\n').filter((l) => l.trim()).length <= 3;
+}
+
+/**
+ * A verdict built from the pull request's own test cases.
+ *
+ * One proven case is enough to say the change is captured, but the others are
+ * still reported: "adds 3, 2 proven, 1 passes on base" is actionable in a way
+ * that a single word never is.
+ */
+function fromCases(c) {
+  const lines = [];
+  const list = (label, items) => {
+    if (!items.length) return;
+    lines.push(`${label}:`);
+    for (const r of items) {
+      lines.push(`  ${r.name}${r.message ? ` — ${firstLine(r.message)}` : ''}`);
+    }
+  };
+
+  list('Failed on base (captures the change)', c.proven);
+  list('Passed on base (proves nothing)', c.passed);
+  list('Could not run on base', c.loadErrors);
+  if (c.unmatched.length) {
+    lines.push('Not found in the test report:');
+    for (const r of c.unmatched) lines.push(`  ${r.name}`);
+  }
+
+  const evidence = lines.join('\n');
+  const v = (outcome, reason) => ({ outcome, reason, junit: null, evidence, cases: c });
+
+  if (c.proven.length > 0) return v(OUTCOME.RED, 'assertion');
+  if (c.passed.length > 0 && c.loadErrors.length === 0) {
+    return v(OUTCOME.GREEN_ON_BASE, 'passed');
+  }
+  if (c.loadErrors.length > 0) return v(OUTCOME.INCONCLUSIVE, 'load-error');
+  return v(OUTCOME.INCONCLUSIVE, 'unrecognised');
 }
 
 function verdict(outcome, reason, junit, evidence) {

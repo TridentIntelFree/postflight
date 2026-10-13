@@ -7,6 +7,7 @@
 
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
+import { extractTestNames } from './cases.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -62,7 +63,12 @@ async function main() {
   // between a useful finding and three accusations against innocent commits.
   const { added, removed } = await changedLines(baseSha, headSha, files);
   const newCases = countAddedTestCases(added, removed);
+  const addedNames = extractTestNames(added);
   log.info(`New test cases added: ${newCases}`);
+  if (addedNames.length) {
+    log.group('Cases this pull request adds', () =>
+      addedNames.forEach((n) => log.info(`  ${n}`)));
+  }
   if (newCases === 0) {
     return finish({
       outcome: OUTCOME.NOT_APPLICABLE,
@@ -125,7 +131,7 @@ async function main() {
       startedAt
     );
 
-    let verdict = classify(run, junitXml);
+    let verdict = classify(run, junitXml, addedNames);
 
     // Confirm a claim of proof before making it. A flaky test fails on base
     // too, and crediting that as evidence is the most damaging thing this
@@ -145,7 +151,7 @@ async function main() {
         const againXml = await collectJUnit(
           listInput('junit-paths', ['.']), built.worktree, startedAt
         );
-        const repeat = classify(again, againXml);
+        const repeat = classify(again, againXml, addedNames);
         if (repeat.outcome !== OUTCOME.RED) {
           log.warn('The base failure did not reproduce — treating it as flaky.');
           verdict = {
