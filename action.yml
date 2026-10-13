@@ -56,6 +56,17 @@ inputs:
     default: |
       .
 
+  confirmations:
+    description: |
+      How many times to repeat a failing base run before reporting it as
+      proof. A flaky test fails on base too, and crediting that as evidence is
+      the most damaging mistake this check can make — it tells you a test has
+      teeth when it does not. Set 0 to skip, at the cost of trusting a single
+      run. Only a proven verdict is re-run, so the cost falls on roughly a
+      third of pull requests.
+    required: false
+    default: '1'
+
   base:
     description: Base ref to compare against. Defaults to the pull request's base SHA.
     required: false
@@ -127,6 +138,7 @@ runs:
         INPUT_JUNIT_PATHS: ${{ inputs.junit-paths }}
         INPUT_SETUP_COMMAND: ${{ inputs.setup-command }}
         INPUT_LINK_PATHS: ${{ inputs.link-paths }}
+        INPUT_CONFIRMATIONS: ${{ inputs.confirmations }}
         INPUT_BASE: ${{ inputs.base }}
         INPUT_ON_GREEN: ${{ inputs.on-green }}
         INPUT_ON_INCONCLUSIVE: ${{ inputs.on-inconclusive }}

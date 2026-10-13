@@ -10,6 +10,7 @@ import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
+import { changesBehaviour } from './behaviour.js';
 import { buildReport, postComment } from './report.js';
 
 const POLICY = { fail: 'fail', warn: 'warn', pass: 'pass' };
@@ -72,11 +73,30 @@ async function main() {
     });
   }
 
+  // A source change of pure comments or formatting has altered nothing a
+  // test could observe, so there is no behaviour to capture and "not proven"
+  // would be true but useless. Measured against real history this was the
+  // last surviving false alarm.
+  const sourceFiles = changed.filter((f) => !files.includes(f));
+  if (sourceFiles.length) {
+    const src = await changedLines(baseSha, headSha, sourceFiles);
+    if (!changesBehaviour(src.added, src.removed)) {
+      log.info('Source changes are comments or formatting only.');
+      return finish({
+        outcome: OUTCOME.NOT_APPLICABLE,
+        reason: 'no-behaviour-change',
+        files,
+        baseSha,
+        headSha,
+      });
+    }
+  }
+
   const built = await buildBaseWorktree({
     baseSha,
     headSha,
     testFiles: files,
-    linkPaths: listInput('link-paths', ['node_modules']),
+    linkPaths: listInput('link-paths', ['node_modules', '.venv', 'venv', 'vendor']),
   });
 
   try {
@@ -105,7 +125,42 @@ async function main() {
       startedAt
     );
 
-    const verdict = classify(run, junitXml);
+    let verdict = classify(run, junitXml);
+
+    // Confirm a claim of proof before making it. A flaky test fails on base
+    // too, and crediting that as evidence is the most damaging thing this
+    // check can get wrong: it tells you a test has teeth when it does not.
+    // Only RED is re-run — it is the only verdict that asserts something, and
+    // paying the cost on ~a third of pull requests keeps the check cheap.
+    const confirmations = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
+    if (verdict.outcome === OUTCOME.RED && confirmations > 0) {
+      for (let i = 1; i <= confirmations; i++) {
+        log.info(`Confirming the failure is not flaky (${i}/${confirmations})…`);
+        const again = await runTests({
+          command: testCommand,
+          files: built.overlaid,
+          cwd: built.worktree,
+          echo: false,
+        });
+        const againXml = await collectJUnit(
+          listInput('junit-paths', ['.']), built.worktree, startedAt
+        );
+        const repeat = classify(again, againXml);
+        if (repeat.outcome !== OUTCOME.RED) {
+          log.warn('The base failure did not reproduce — treating it as flaky.');
+          verdict = {
+            outcome: OUTCOME.INCONCLUSIVE,
+            reason: 'flaky',
+            evidence:
+              'The tests failed against base on the first run and did not on a ' +
+              'repeat. A test that fails intermittently fails on base too, so ' +
+              'this cannot be counted as evidence either way.',
+          };
+          break;
+        }
+      }
+    }
+
     return finish({
       ...verdict,
       files: built.overlaid,

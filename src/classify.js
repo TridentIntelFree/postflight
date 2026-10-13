@@ -80,6 +80,30 @@ const ASSERTION_MARKERS = [
  * @param {string} [junitXml]    Report content, when the runner produced one.
  */
 export function classify(run, junitXml) {
+  // Before anything else: did the command run at all? A test runner that was
+  // never found says nothing about the tests, and reporting "inconclusive"
+  // for it hides a setup problem behind a verdict. This is the first wall
+  // every non-Node project hits, because the interpreter or virtualenv the
+  // command names is not in the base worktree.
+  if (isCommandUnavailable(run)) {
+    return verdict(OUTCOME.ERROR, 'command-unavailable', null,
+      [
+        excerpt(run.output || '', /not found|No such file|cannot execute/i, 6),
+        '',
+        'The test command could not run inside the base worktree, which is a',
+        'fresh checkout and does not inherit the job\'s installed tooling.',
+        'Either link what it needs:',
+        '',
+        '    link-paths: |',
+        '      .venv',
+        '      node_modules',
+        '',
+        'or install it there:',
+        '',
+        '    setup-command: pip install -e .',
+      ].join('\n'));
+  }
+
   // Structured evidence wins: JUnit XML already separates the two cases, so
   // there is nothing to infer.
   if (junitXml) {
@@ -122,6 +146,19 @@ export function classify(run, junitXml) {
   // Non-zero exit, nothing recognisable. Say so rather than pick a side:
   // claiming proof we do not have is the one failure this tool must not have.
   return verdict(OUTCOME.INCONCLUSIVE, 'unrecognised', null, excerpt(output));
+}
+
+/**
+ * Did the shell fail to find the command, rather than the tests failing?
+ * Deliberately narrow: exit 127 is the shell's own "not found" code, and the
+ * message patterns are anchored so a test that merely PRINTS "not found"
+ * cannot be mistaken for one.
+ */
+function isCommandUnavailable(run) {
+  if (run.exitCode === 127) return true;
+  const out = run.output || '';
+  return /^[^\n]*(?:command not found|: not found|No such file or directory)\s*$/m.test(out)
+    && out.split('\n').filter((l) => l.trim()).length <= 3;
 }
 
 function verdict(outcome, reason, junit, evidence) {
