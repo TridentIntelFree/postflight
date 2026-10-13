@@ -12,6 +12,7 @@ import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect
 import { extractTestNames, coversAny, hasLoadError } from './cases.js';
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
+import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -201,6 +202,38 @@ async function main() {
     }
 
     let verdict = classify(run, report, addedNames);
+
+    // "Could not run" covers several different situations. Say which, because
+    // one of them — a test using code this pull request introduces — is not a
+    // problem at all and should not read like one.
+    //
+    // `unrecognised` is diagnosed too: measured against real history it is
+    // where a runner that crashed before starting ends up, and reporting that
+    // as a judgement about the author's tests hides a setup problem. But its
+    // own label is kept when the diagnosis learns nothing, since
+    // "unrecognised" is already the more specific of the two.
+    const diagnosable = verdict.outcome === OUTCOME.INCONCLUSIVE
+      && (verdict.reason === 'load-error' || verdict.reason === 'unrecognised');
+    if (diagnosable) {
+      const sourceFiles2 = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
+      const src = sourceFiles2.length
+        ? await changedLines(baseSha, headSha, sourceFiles2)
+        : { added: [] };
+      const depFiles = changed.filter(isDependencyFile);
+      const dep = depFiles.length
+        ? await changedLines(baseSha, headSha, depFiles)
+        : { added: [], removed: [] };
+      const d = diagnoseLoadError({
+        message: `${verdict.evidence || ''}\n${run.output || ''}`,
+        addedSourceLines: src.added,
+        changedFiles: changed,
+        dependencyDiff: [...dep.added, ...dep.removed],
+      });
+      if (d.kind !== 'unknown' || verdict.reason === 'load-error') {
+        log.info(`Could not run on base: ${d.kind}`);
+        verdict = { ...verdict, reason: d.kind, diagnosis: d };
+      }
+    }
 
     // Confirm a claim of proof before making it. A flaky test fails on base
     // too, and crediting that as evidence is the most damaging thing this

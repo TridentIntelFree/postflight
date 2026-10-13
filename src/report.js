@@ -54,7 +54,18 @@ const PRESENTATION = {
 const MARKER = '<!-- postflight-report -->';
 
 export function buildReport(result) {
-  const p = PRESENTATION[result.outcome] ?? PRESENTATION[OUTCOME.ERROR];
+  let p = PRESENTATION[result.outcome] ?? PRESENTATION[OUTCOME.ERROR];
+  if (result.diagnosis?.kind === 'references-new-code') {
+    p = {
+      ...p,
+      icon: '➖',
+      title: 'Nothing to prove yet',
+      lead: 'These tests exercise code this pull request introduces.',
+      // Deliberately short: the diagnosis below names what was missing, and
+      // saying it twice in different words reads like the check is padding.
+      detail: 'That is the normal shape of new work, not a fault.',
+    };
+  }
   const lines = [];
 
   lines.push(MARKER);
@@ -90,6 +101,14 @@ export function buildReport(result) {
     lines.push(result.files.join('\n'));
     lines.push('```');
     lines.push('</details>');
+  }
+
+  // The diagnosis, when there is one, is the actionable part: it says which
+  // of the three "could not run" situations this is and what to do, which a
+  // stack trace does not.
+  if (result.diagnosis) {
+    lines.push('');
+    lines.push(result.diagnosis.explanation);
   }
 
   if (result.evidence) {

@@ -28,6 +28,9 @@ export function parseJUnit(xml) {
       status = 'failed';
       type = 'failure';
       message = extractMessage(body, 'failure');
+      // Not every runner honours the distinction its own report format
+      // draws. See neverRan().
+      if (neverRan(attrs.name || '', message)) type = 'error';
     } else if (/<error\b/.test(body)) {
       status = 'failed';
       type = 'error';
@@ -47,6 +50,39 @@ export function parseJUnit(xml) {
   }
 
   return cases;
+}
+
+/**
+ * A `<failure>` that is really a file that never ran.
+ *
+ * node:test's JUnit reporter does not use `<error>` at all. A test file that
+ * could not even be imported comes out as a `<failure type="testCodeFailure">`
+ * named after the file, in exactly the shape of a real assertion failure:
+ *
+ *   <testcase name="test/a.test.js" classname="test" failure="test failed">
+ *     <failure type="testCodeFailure" message="test failed">
+ *       [Error: test failed] { code: 'ERR_TEST_FAILURE',
+ *         failureType: 'testCodeFailure', cause: 'test failed', … }
+ *
+ * Taken at face value that reads as "the test ran against base and
+ * disagreed", which is the one conclusion this tool must never reach by
+ * accident — a file that will not import proves nothing whatsoever. Found by
+ * running postflight end to end against a commit adding a new export, where
+ * it reported "Proven" for a test that had never executed.
+ *
+ * Two marks together, because either alone could misfire:
+ *
+ *   the name is a path to a file   a real case name is not a path
+ *   the cause is the bare string   a genuine assertion carries the
+ *     'test failed'                  AssertionError as its cause
+ *
+ * When in doubt this errs toward "could not run", which costs a true finding
+ * at worst; the opposite error hands out false credit.
+ */
+function neverRan(name, message) {
+  const looksLikeAFile = /[/\\]/.test(name) && /\.[cm]?[jt]sx?$/.test(name);
+  const noDetail = /cause:\s*'test failed'/.test(message);
+  return looksLikeAFile && noDetail;
 }
 
 function parseAttrs(text) {

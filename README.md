@@ -61,8 +61,25 @@ requests** — telling authors their tests had teeth when they did not.
 |---|---|
 | ✅ **Proven** | A touched test failed an assertion on base. It ran against the old code, observed it, and disagreed. |
 | ❌ **Not proven** | Every touched test also passes on base. Whatever they check, it isn't what this PR changed. |
-| ⚠️ **Inconclusive** | The tests couldn't run on base at all — they reference code this PR introduces. Nothing proven either way. |
+| ⚠️ **Inconclusive** | The tests couldn't run on base at all. Nothing proven either way — but postflight says *why*, and one of the reasons isn't a problem. |
 | ➖ **Not applicable** | No test files touched. |
+
+### "Couldn't run" is four different things
+
+Reporting them as one verdict is how a check gets ignored, because the most
+common of them is not a fault at all:
+
+| Reason | What it means | What to do |
+|---|---|---|
+| **references new code** | The test uses something this PR introduces, so it could not exist at base. | Nothing. This is the normal shape of new work, and postflight reports it as ➖ *Nothing to prove yet* rather than a warning. |
+| **dependency drift** | The PR moves a package in its manifest, so the installed tree belongs to head. Named only when the missing package is one the PR actually moved. | `setup-command: npm ci` |
+| **missing dependency** | A package the project needs isn't in the base worktree, which is a fresh checkout. | `link-paths:` it, or install it with `setup-command` |
+| **unrecognised** | The runner said nothing postflight can read. | The raw output is reported unchanged rather than summarised into a guess. |
+
+The distinction between the middle two matters more than it looks. A PR that
+bumps `encodeurl` while `array-flatten` is what actually went missing will be
+told its dependency change is to blame — and sent to look at a file that is
+fine. Measured against express, that was 3 of 7 inconclusive pull requests.
 
 ### The distinction that makes this trustworthy
 
@@ -87,13 +104,21 @@ in the log which applies:
 
 | | Runners |
 |---|---|
-| **JUnit XML** — read directly, nothing inferred | vitest, mocha, node:test, pytest, gradle, maven |
+| **JUnit XML** — read directly, nothing inferred | vitest, mocha, node:test\*, pytest, gradle, maven |
 | **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`) |
 | **Reading output** — the fragile path | cargo, rspec |
 
 Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is
 the one failure this tool must not have.
+
+\* node:test emits JUnit XML but does not use `<error>` at all: a file that
+could not be imported arrives as a `<failure>` named after the file, in the
+same shape as a real assertion failure. Taken at face value that reads as
+proof, so postflight corrects it, matching on two marks together — the case
+is named after a file *and* carries `cause: 'test failed'` with no assertion
+detail. Pinned by a real captured report in
+[`test/fixtures/`](test/fixtures/nodetest-import-failure.xml).
 
 ## Measured on real history
 
