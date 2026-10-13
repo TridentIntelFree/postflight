@@ -12,13 +12,16 @@ const PRESENTATION = {
       'captures the change rather than merely covering it.',
   },
   [OUTCOME.GREEN_ON_BASE]: {
-    icon: '❌',
+    icon: '⚠️',
     title: 'Not proven',
-    lead: 'Every test this pull request touches also passes on the base commit.',
+    lead: 'The tests added here also pass on the base commit.',
     detail:
-      'These tests run happily against the unfixed code, so whatever they ' +
-      'check, it is not what this pull request changed. If this is a fix, it ' +
-      'has no test that would have caught the bug.',
+      'They run happily against the old code, so they do not capture any ' +
+      'behaviour change. If this pull request fixes a bug, nothing here ' +
+      'would have caught it.\n\n' +
+      'This is information, not an accusation. A test written for behaviour ' +
+      'that already worked is a perfectly good test and looks identical from ' +
+      'here — only you know which this is.',
   },
   [OUTCOME.INCONCLUSIVE]: {
     icon: '⚠️',
@@ -34,25 +37,28 @@ const PRESENTATION = {
   [OUTCOME.NOT_APPLICABLE]: {
     icon: '➖',
     title: 'No tests to check',
-    lead: 'This pull request does not touch any test files.',
-    detail: 'Nothing to prove, so nothing was run.',
+    lead: 'There is nothing for this check to prove.',
+    detail:
+      'Either no test files were touched, or the changes to them renamed, ' +
+      'moved or removed tests without adding any. A pull request that ' +
+      'asserts nothing new has nothing to disprove.',
   },
   [OUTCOME.ERROR]: {
     icon: '🔥',
     title: 'Check failed',
-    lead: 'redgreen could not complete.',
+    lead: 'postflight could not complete.',
     detail: 'This is a problem with the check, not with the pull request.',
   },
 };
 
-const MARKER = '<!-- redgreen-report -->';
+const MARKER = '<!-- postflight-report -->';
 
 export function buildReport(result) {
   const p = PRESENTATION[result.outcome] ?? PRESENTATION[OUTCOME.ERROR];
   const lines = [];
 
   lines.push(MARKER);
-  lines.push(`### ${p.icon} redgreen — ${p.title}`);
+  lines.push(`### ${p.icon} postflight — ${p.title}`);
   lines.push('');
   lines.push(`**${p.lead}**`);
   lines.push('');
@@ -91,7 +97,7 @@ export function buildReport(result) {
   lines.push('');
   lines.push('```json');
   lines.push(JSON.stringify({
-    tool: 'redgreen',
+    tool: 'postflight',
     outcome: result.outcome,
     reason: result.reason ?? null,
     base: result.baseSha?.slice(0, 12) ?? null,
@@ -108,7 +114,7 @@ function clip(text, max) {
 }
 
 /**
- * Post the report, replacing redgreen's previous comment rather than adding
+ * Post the report, replacing postflight's previous comment rather than adding
  * to a pile of them. Never throws: losing the comment must not lose the
  * verdict, which is also an output and a job summary.
  */

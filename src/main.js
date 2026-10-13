@@ -1,4 +1,4 @@
-// redgreen — prove a pull request's new tests actually fail without its fix.
+// postflight — prove a pull request's new tests actually fail without its fix.
 //
 //   1. find the test files this pull request touches
 //   2. build the base commit's source with those tests laid over it
@@ -6,8 +6,8 @@
 //   4. say what that proved, and how strongly
 
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
-import { DEFAULT_PATTERNS, selectTestFiles } from './detect.js';
-import { assertHistory, changedFiles, buildBaseWorktree } from './worktree.js';
+import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
+import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
 import { buildReport, postComment } from './report.js';
@@ -32,7 +32,7 @@ async function main() {
       outcome: OUTCOME.NOT_APPLICABLE,
       reason: 'no-base',
       files: [],
-      note: 'redgreen compares against a pull request base; this run has none.',
+      note: 'postflight compares against a pull request base; this run has none.',
     });
   }
 
@@ -54,6 +54,23 @@ async function main() {
   }
 
   log.group('Test files to evaluate', () => files.forEach((f) => log.info(`  ${f}`)));
+
+  // A pull request that only renames, reformats or deletes tests is asserting
+  // nothing new, so there is nothing to prove and "not proven" would be a
+  // false alarm. Measured against real project history this is the difference
+  // between a useful finding and three accusations against innocent commits.
+  const { added, removed } = await changedLines(baseSha, headSha, files);
+  const newCases = countAddedTestCases(added, removed);
+  log.info(`New test cases added: ${newCases}`);
+  if (newCases === 0) {
+    return finish({
+      outcome: OUTCOME.NOT_APPLICABLE,
+      reason: 'no-new-tests',
+      files,
+      baseSha,
+      headSha,
+    });
+  }
 
   const built = await buildBaseWorktree({
     baseSha,
@@ -127,7 +144,7 @@ async function finish(result) {
   }
 
   const policy = policyFor(result.outcome);
-  const headline = `redgreen: ${result.outcome}${result.reason ? ` (${result.reason})` : ''}`;
+  const headline = `postflight: ${result.outcome}${result.reason ? ` (${result.reason})` : ''}`;
 
   if (result.outcome === OUTCOME.ERROR || policy === POLICY.fail) {
     log.error(headline);

@@ -82,6 +82,46 @@ function escapeLiteral(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Declarations that introduce a test case, per ecosystem.
+ *
+ * Used to answer: does this pull request actually ADD a test? A diff that
+ * only renames, reformats or deletes tests is claiming nothing, so there is
+ * nothing to disprove — and reporting "not proven" against it is a false
+ * alarm. Measured against real history, that distinction is the difference
+ * between one useful finding and three accusations that get the check
+ * switched off.
+ */
+const TEST_DECLARATIONS = [
+  /\b(?:it|test|specify)\s*(?:\.\s*\w+\s*)?\(/,   // JS: it( test( it.each(
+  /\bdescribe\s*(?:\.\s*\w+\s*)?\(/,              // JS: describe(
+  /\bdef\s+test_\w+/,                             // Python
+  /\bfunc\s+(?:Test|Benchmark|Fuzz|Example)\w*\s*\(/, // Go
+  /@Test\b/,                                      // Java / Kotlin (JUnit)
+  /#\[(?:test|tokio::test)\]/,                    // Rust
+  /\bit\s+['"]/, /\bscenario\s+['"]/,             // RSpec / Ruby
+  /\[(?:Fact|Theory)\]/,                          // C# (xUnit)
+];
+
+/** Does this line declare a test case? */
+export function isTestDeclaration(line) {
+  return TEST_DECLARATIONS.some((re) => re.test(line));
+}
+
+/**
+ * NET new test cases: declarations added, minus declarations removed.
+ *
+ * Net, not gross, because renaming a test shows up as one removed
+ * declaration and one added one. Counting only additions reads that as a
+ * brand-new test and fires "not proven" at someone who fixed a typo — which
+ * is exactly what it did against real history before this was netted off.
+ */
+export function countAddedTestCases(added, removed = []) {
+  const gained = added.filter(isTestDeclaration).length;
+  const lost = removed.filter(isTestDeclaration).length;
+  return Math.max(0, gained - lost);
+}
+
 /** Normalise a repo-relative path for matching. */
 function normalise(path) {
   return path.replace(/\\/g, '/').replace(/^\.\//, '');

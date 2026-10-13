@@ -1,4 +1,4 @@
-name: redgreen
+name: postflight
 description: Prove a pull request's new tests actually fail without its fix.
 author: TridentIntelFree
 
@@ -63,10 +63,22 @@ inputs:
 
   on-green:
     description: |
-      What to do when every touched test still passes on base — the finding
-      this action exists to surface. `fail` (default), `warn`, or `pass`.
+      What to do when every touched test still passes on base: `warn`
+      (default), `fail`, or `pass`.
+
+      The default is advisory, not blocking, and that is a measured choice
+      rather than timidity. Across 24 real commits of an established project
+      this verdict fired once, and that once was a pull request whose source
+      change was pure documentation — the added test passed on base because
+      nothing had changed. The verdict was accurate and blocking it would
+      still have been wrong.
+
+      Adding a test for behaviour that already works is normal and good, and
+      indistinguishable from failing to test a fix without knowing intent.
+      Turn this to `fail` once you have seen enough verdicts on your own
+      codebase to trust it.
     required: false
-    default: 'fail'
+    default: 'warn'
 
   on-inconclusive:
     description: |
@@ -94,20 +106,20 @@ outputs:
     description: 'One of: red, inconclusive, green-on-base, not-applicable, error.'
     # Composite outputs are not wired up implicitly: without an explicit
     # `value` they resolve to the empty string, silently.
-    value: ${{ steps.redgreen.outputs.outcome }}
+    value: ${{ steps.postflight.outputs.outcome }}
   tested-files:
     description: Newline-separated test files that were evaluated.
-    value: ${{ steps.redgreen.outputs.tested-files }}
+    value: ${{ steps.postflight.outputs.tested-files }}
   report:
     description: The full result as Markdown.
-    value: ${{ steps.redgreen.outputs.report }}
+    value: ${{ steps.postflight.outputs.report }}
 
 runs:
   using: composite
   steps:
-    - name: redgreen
+    - name: postflight
       shell: bash
-      id: redgreen
+      id: postflight
       run: node "$GITHUB_ACTION_PATH/src/main.js"
       env:
         INPUT_TEST_COMMAND: ${{ inputs.test-command }}

@@ -1,5 +1,5 @@
 {
-  "name": "redgreen",
+  "name": "postflight",
   "version": "0.1.0",
   "description": "Prove a pull request's new tests actually fail without its fix.",
   "license": "MIT",

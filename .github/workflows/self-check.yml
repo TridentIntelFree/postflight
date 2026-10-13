@@ -1,6 +1,6 @@
 name: Self-check
 
-# redgreen, run against redgreen's own pull requests.
+# postflight, run against postflight's own pull requests.
 #
 # The CI workflow tests the modules. This one exercises the action itself —
 # composite resolution, $GITHUB_ACTION_PATH, the worktree and overlay, the
@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: 20
 
-      - id: redgreen
+      - id: postflight
         uses: ./
         with:
           test-command: node --test {files}
@@ -40,8 +40,8 @@ jobs:
       # loudly when they did — exactly the kind of silent break worth a guard.
       - name: Outputs are populated
         run: |
-          echo "outcome: '${{ steps.redgreen.outputs.outcome }}'"
-          if [ -z "${{ steps.redgreen.outputs.outcome }}" ]; then
-            echo "::error::redgreen produced no outcome output"
+          echo "outcome: '${{ steps.postflight.outputs.outcome }}'"
+          if [ -z "${{ steps.postflight.outputs.outcome }}" ]; then
+            echo "::error::postflight produced no outcome output"
             exit 1
           fi
