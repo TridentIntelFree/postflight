@@ -14,9 +14,11 @@
 
 import { readFile, access } from 'node:fs/promises';
 import { parseGoJson } from './gotest.js';
+import { parseJestJson } from './jestjson.js';
 import { join } from 'node:path';
 
 const REPORT = 'postflight-report.xml';
+const JSON_REPORT = 'postflight-report.json';
 
 const exists = async (dir, name) => {
   try { await access(join(dir, name)); return true; } catch { return false; }
@@ -45,10 +47,14 @@ const RUNNERS = {
     filter: (names) => `-t ${quote(names.join('|'))}`,
   },
   jest: {
-    // jest has no built-in JUnit reporter; jest-junit is a separate package we
-    // must not assume is installed.
-    command: 'npx jest {files} --ci',
+    // No JUnit without the separate jest-junit package, which cannot be
+    // assumed present — but jest's own --json report is structured and draws
+    // the run/never-ran distinction clearly. Written to a file so jest's
+    // progress output can still go to the terminal.
+    command: `npx jest {files} --ci --json --outputFile=${JSON_REPORT}`,
     junit: false,
+    reportFile: JSON_REPORT,
+    parse: parseJestJson,
     filter: (names) => `-t ${quote(names.join('|'))}`,
   },
   mocha: {
@@ -151,4 +157,4 @@ function named(name) {
 }
 
 export const KNOWN_RUNNERS = Object.keys(RUNNERS);
-export { RUNNERS, REPORT };
+export { RUNNERS, REPORT, JSON_REPORT };

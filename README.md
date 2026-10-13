@@ -82,11 +82,18 @@ So postflight separates *failed an assertion* from *never ran*:
 - **Load error** — the test never executed. Weak: equally consistent with a
   test that checks everything and one that checks nothing.
 
-Where your runner emits JUnit XML, that distinction is read straight from it —
-`<failure>` versus `<error>` is precisely this difference, so nothing is
-inferred. Without a report, postflight falls back to recognising runner output,
-and when it recognises nothing it says *inconclusive* rather than guessing.
-Claiming proof it doesn't have is the one failure this tool must not have.
+How that distinction is established depends on the runner, and postflight says
+in the log which applies:
+
+| | Runners |
+|---|---|
+| **JUnit XML** — read directly, nothing inferred | vitest, mocha, node:test, pytest, gradle, maven |
+| **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`) |
+| **Reading output** — the fragile path | cargo, rspec |
+
+Only the third guesses, and when it recognises nothing it reports
+*inconclusive* rather than picking a side. Claiming proof it doesn't have is
+the one failure this tool must not have.
 
 ## Measured on real history
 

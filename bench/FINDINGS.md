@@ -237,3 +237,43 @@ No regressions: express and click both unchanged (0 verdict differences).
 jest (needs the separate jest-junit package), cargo and rspec. jest is the
 most used of the three and so the most worth solving; `--json --outputFile`
 is structured but is not JUnit, so it needs its own small parser like Go's.
+
+---
+
+## 2026-10-13 — jest via its own --json report
+
+jest has no JUnit output without the separate jest-junit package, which cannot
+be assumed present. Its `--json` report is structured and sufficient, and it
+draws the needed distinction cleanly:
+
+- a suite that **ran** has entries in `assertionResults`, each with a status
+- a suite that **never loaded** has `assertionResults: []` plus a `message`,
+  and is counted in `numRuntimeErrorTestSuites`
+
+So an import error cannot be read as a test that ran and disagreed. Verified
+against real captured reports in `test/fixtures/jest-*.json` — produced by
+installing jest and running it against genuinely failing and genuinely
+unloadable code, not written from memory.
+
+A broken suite does **not** swallow the results of suites that did run; that
+is pinned by a test, because it would be an easy and silent way to lose cases.
+
+The report is written to a file rather than stdout, since jest interleaves
+progress output. `readReport()` in main.js now handles all three shapes —
+stdout stream (go), report file (jest), JUnit search (everything else) — and
+falls back to the JUnit search when a runner's own report is missing or
+unparseable.
+
+### Reliability by runner, after this change
+
+```
+JUnit XML        vitest, mocha, node-test, pytest, gradle, maven
+structured       jest, go
+heuristics       cargo, rspec
+```
+
+8 of 10 no longer guess. A log line now states which tier is in use, and only
+the heuristics tier is a warning — the previous message claimed jest was being
+read from output even after it was being parsed, which was simply wrong.
+
+No regressions: express and click unchanged, 0 verdict differences.
