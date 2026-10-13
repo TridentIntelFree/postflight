@@ -1,0 +1,47 @@
+name: Self-check
+
+# redgreen, run against redgreen's own pull requests.
+#
+# The CI workflow tests the modules. This one exercises the action itself —
+# composite resolution, $GITHUB_ACTION_PATH, the worktree and overlay, the
+# comment API — none of which a unit test touches.
+#
+# It is advisory (`on-green: warn`). A project whose own gate blocks its
+# first contributor on a technicality is a project nobody contributes to,
+# and the verdict is still posted either way.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  self:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # both sides of the comparison must be present
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - id: redgreen
+        uses: ./
+        with:
+          test-command: node --test {files}
+          on-green: warn
+
+      # Proves the outputs are actually wired. They resolved to empty strings
+      # until `value:` was added to each one in action.yml, and nothing failed
+      # loudly when they did — exactly the kind of silent break worth a guard.
+      - name: Outputs are populated
+        run: |
+          echo "outcome: '${{ steps.redgreen.outputs.outcome }}'"
+          if [ -z "${{ steps.redgreen.outputs.outcome }}" ]; then
+            echo "::error::redgreen produced no outcome output"
+            exit 1
+          fi
