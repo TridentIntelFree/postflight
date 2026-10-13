@@ -755,3 +755,109 @@ evidence or a coin toss are in CI.
   Reading the bound would need to understand the assertion, which is a much
   larger job than reading the call.
 - cargo remains the last runner on output heuristics.
+
+---
+
+## 2026-10-13 — auditing every runner before adding anything
+
+"Before we add, let's test what we have." The right instinct: **three of the
+ten runners had never been run at all**, and the README called them the
+*reliable* tier — which is the tier node:test was in when it was handing out
+false proof.
+
+Every toolchain was available in the sandbox, so all four gaps were testable.
+Each runner got a two-commit lab and the one case that produces false proof: a
+test referencing code the pull request introduces.
+
+| Runner | Evidence before | Case B result |
+|---|---|---|
+| mocha, pytest | 59 real commits | ✅ safe |
+| jest, go, node:test, rspec | fixtures + end to end | ✅ safe |
+| cargo | **none** | ✅ safe — `inconclusive` |
+| maven | **none** | ✅ safe verdict, wrong diagnosis |
+| gradle | **none** | ✅ safe verdict, could not run at all |
+| **vitest** | **none** | ❌ **`red` — "✅ Proven"** |
+
+### vitest: false proof, and the cause is a bundler
+
+```
+| ✅ | modulo is non-negative | failed — captures the change |
+```
+
+The test never executed. esbuild rewrites a named import to a property
+access, so a missing export **never surfaces as an import error** — it becomes
+`undefined`, and the only symptom is at the call site:
+
+```xml
+<testsuites tests="3" failures="1" errors="0">
+  <failure message="(0 , modulo) is not a function" type="TypeError">
+```
+
+`errors="0"`. There is nothing in the output to recognise, and vitest is not
+wrong — from its point of view a call returned the wrong thing. This is the
+third runner in a row to defeat the JUnit `<failure>`/`<error>` distinction,
+in a third different way (mocha: no report; jest: empty `assertionResults`;
+node:test: mislabelled `<failure>`; vitest: no error at all).
+
+**So the fix is not another message pattern.** Pattern-matching cannot settle
+it, because the identical `TypeError` is a genuine observation when the code
+does exist. What settles it is evidence already to hand: **does this pull
+request DECLARE the name that went missing?** If so, base cannot have had it.
+
+That is runner-agnostic, and deliberately so — the next runner to do this is
+already covered. It is also destructive, since it discards a RED, so:
+
+- applied **per proven case**: one case failing for want of new code must not
+  discard a sibling that genuinely disagreed with base;
+- fires only on positive evidence (`references-new-code`), never on `unknown`,
+  `missing-dependency` or `dependency-drift`;
+- **measured: fired 0 times across 59 real commits** of express and click, 0
+  verdict and 0 reason differences. That control is what makes it trustworthy.
+
+A second bug fell out: the per-case table still printed "failed — captures the
+change" under a headline saying nothing was proven. Downgrading now moves the
+case out of `proven`.
+
+### maven: the diagnosis blamed the wrong thing
+
+Verdict was safe but it said `missing-dependency` for a method the pull
+request plainly added. Two gaps:
+
+- javac prints `cannot find symbol` and `symbol: method modulo(int,int)` on
+  separate lines, further apart than the old 80-character window allowed.
+- **the C family declares a method with a return type and no keyword** —
+  `public static int modulo(int a, int b)` — so none of the
+  function/def/fn/func patterns saw it.
+
+The C-family pattern needs a statement-keyword guard or an ordinary
+`return modulo(a, b);` reads as a declaration. Pinned by a test both ways.
+
+### gradle: could not check a project without a committed wrapper
+
+`command: './gradlew test'` was hardcoded. A project without a committed
+wrapper reported `command-unavailable` and stopped — it could never be checked
+at all. Now prefers `./gradlew` when present and falls back to `gradle`.
+
+The wrapper preference is right when it exists, since it pins the version;
+hardcoding it was the bug.
+
+### cargo was fine, and is worth saying
+
+`error[E0432]: unresolved import` is caught by the existing load-error
+markers, so the verdict was correct without any change. Only the *diagnosis*
+needed cargo's actual wording — which is `unresolved import`, not the
+`cannot find function` the first guess assumed.
+
+### After
+
+All ten runners verified on the false-proof case. 130 tests. Eleven mutations
+in CI. express and click: 0 differences.
+
+### Lesson
+
+**An unverified claim in a table is a claim.** The README listed vitest,
+gradle and maven in the most-reliable tier purely because their reporter was
+supposed to emit JUnit XML — the exact assumption that was already known to be
+false for node:test, written down in this file, and still repeated. Checking
+runners one at a time as they come up means the tenth is trusted for nine
+releases. Audit the whole table.

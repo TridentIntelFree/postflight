@@ -215,24 +215,80 @@ async function main() {
     // "unrecognised" is already the more specific of the two.
     const diagnosable = verdict.outcome === OUTCOME.INCONCLUSIVE
       && (verdict.reason === 'load-error' || verdict.reason === 'unrecognised');
-    if (diagnosable) {
-      const sourceFiles2 = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
-      const src = sourceFiles2.length
-        ? await changedLines(baseSha, headSha, sourceFiles2)
-        : { added: [] };
+
+    // What this pull request's non-test files add, and what it did to its
+    // dependency manifests. Both verdict corrections below need it, so it is
+    // gathered once rather than inside each.
+    const needsSourceContext = diagnosable || verdict.outcome === OUTCOME.RED;
+    let addedSourceLines = [];
+    let dependencyDiff = [];
+    if (needsSourceContext) {
+      const plainSource = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
+      if (plainSource.length) {
+        addedSourceLines = (await changedLines(baseSha, headSha, plainSource)).added;
+      }
       const depFiles = changed.filter(isDependencyFile);
-      const dep = depFiles.length
-        ? await changedLines(baseSha, headSha, depFiles)
-        : { added: [], removed: [] };
-      const d = diagnoseLoadError({
-        message: `${verdict.evidence || ''}\n${run.output || ''}`,
-        addedSourceLines: src.added,
-        changedFiles: changed,
-        dependencyDiff: [...dep.added, ...dep.removed],
-      });
+      if (depFiles.length) {
+        const dep = await changedLines(baseSha, headSha, depFiles);
+        dependencyDiff = [...dep.added, ...dep.removed];
+      }
+    }
+    const diagnose = (message) =>
+      diagnoseLoadError({ message, addedSourceLines, changedFiles: changed, dependencyDiff });
+
+    if (diagnosable) {
+      const d = diagnose(`${verdict.evidence || ''}\n${run.output || ''}`);
       if (d.kind !== 'unknown' || verdict.reason === 'load-error') {
         log.info(`Could not run on base: ${d.kind}`);
         verdict = { ...verdict, reason: d.kind, diagnosis: d };
+      }
+    }
+
+    // A "failure" that is really the test not reaching code this pull request
+    // introduces.
+    //
+    // Some runners report that as an ordinary assertion failure, because by
+    // the time it goes wrong there is nothing left that looks like an import
+    // error. vitest is the clearest case: esbuild rewrites a named import to
+    // a property access, so a missing export becomes `undefined` and then
+    // `TypeError: (0, modulo) is not a function` at the call site — with
+    // `errors="0" failures="1"` in the JUnit report. Taken at face value that
+    // reads as proof, and vitest is one of the most used runners there is.
+    //
+    // Pattern-matching the message cannot settle it, because the same
+    // TypeError is a genuine observation when the code does exist. What
+    // settles it is evidence already to hand: does this pull request DECLARE
+    // the name that went missing? If it does, the base commit cannot have had
+    // it, so nothing was observed. That reasoning is runner-agnostic, which is
+    // the point — the next runner to do this will be covered too.
+    if (verdict.outcome === OUTCOME.RED) {
+      // Per proven case where possible. One case failing for want of new code
+      // must not discard a sibling case that genuinely disagreed with base.
+      const provenMessages = verdict.cases?.proven?.length
+        ? verdict.cases.proven.map((c) => c.message || '')
+        : [`${verdict.evidence || ''}`];
+      const diagnoses = provenMessages.map(diagnose);
+      if (diagnoses.length && diagnoses.every((d) => d.kind === 'references-new-code')) {
+        const names = [...new Set(diagnoses.flatMap((d) => d.names))];
+        log.warn(
+          `The base "failure" is this pull request's own ${names.join(', ')} ` +
+          'being absent, not a test observing the old behaviour.'
+        );
+        verdict = {
+          ...verdict,
+          outcome: OUTCOME.INCONCLUSIVE,
+          reason: 'references-new-code',
+          diagnosis: diagnoses[0],
+          // The per-case table is built from this, and leaving the case under
+          // `proven` would print "failed — captures the change" directly under
+          // a headline saying nothing was proven. It did not run; it belongs
+          // with the other things that did not.
+          cases: verdict.cases && {
+            ...verdict.cases,
+            proven: [],
+            loadErrors: [...verdict.cases.loadErrors, ...verdict.cases.proven],
+          },
+        };
       }
     }
 

@@ -112,6 +112,18 @@ jobs:
           sed -i "s|  if (signals.length === 0) return { risk: 'none', signals: \[\], frameworks };||" src/nondeterminism.js
           expect_failure "ordinary tests flagged as sampling" src/nondeterminism.js
 
+          # 10. the bundler-rewritten TypeError no longer names its symbol.
+          #     Without this, vitest reports a test that never executed as
+          #     "✅ Proven" — the worst error this tool can make, in one of
+          #     the most widely used JS runners.
+          perl -0pi -e "s|    /\\\\b\(\\\\w\+\)\\\\\)\? is not a function/g,.*?\n||s" src/diagnose.js
+          expect_failure "bundler TypeError no longer names the symbol" src/diagnose.js
+
+          # 11. a C-family method declaration going unrecognised, which made
+          #     Maven blame a missing dependency for a method the PR added.
+          sed -i 's|  if (addedSourceLines.some((l) => declares.test(l))) return true;|  if (addedSourceLines.some((l) => declares.test(l))) return true; return false;|' src/diagnose.js
+          expect_failure "C-family declaration not recognised" src/diagnose.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored
