@@ -78,13 +78,15 @@ const ASSERTION_MARKERS = [
  * @param {object} run           Result of running the tests against base.
  * @param {number} run.exitCode
  * @param {string} run.output    Combined stdout + stderr.
- * @param {string} [junitXml]    Report content, when the runner produced one.
+ * @param {string|object[]} [report] Either JUnit XML, or cases already
+ *   parsed from a runner's own structured output. Both arrive here in the
+ *   same shape, so nothing downstream needs to know which runner ran.
  * @param {string[]} [addedNames] Names of the test cases this pull request
  *   adds. When these can be matched against the report, the verdict is about
  *   those cases alone — which is both more precise and more correct, since
  *   scoring the whole file credits the author for tests they did not write.
  */
-export function classify(run, junitXml, addedNames = []) {
+export function classify(run, report, addedNames = []) {
   // Before anything else: did the command run at all? A test runner that was
   // never found says nothing about the tests, and reporting "inconclusive"
   // for it hides a setup problem behind a verdict. This is the first wall
@@ -111,8 +113,9 @@ export function classify(run, junitXml, addedNames = []) {
 
   // Structured evidence wins: JUnit XML already separates the two cases, so
   // there is nothing to infer.
-  if (junitXml) {
-    const parsed = parseJUnit(junitXml);
+  const hasReport = Array.isArray(report) ? report.length > 0 : !!report;
+  if (hasReport) {
+    const parsed = Array.isArray(report) ? report : parseJUnit(report);
 
     // Per-case first: a verdict about the cases the pull request actually
     // added beats one about every test that happens to share their file.
