@@ -1,0 +1,117 @@
+name: redgreen
+description: Prove a pull request's new tests actually fail without its fix.
+author: TridentIntelFree
+
+branding:
+  icon: check-square
+  color: red
+
+inputs:
+  test-command:
+    description: |
+      Command that runs the given test files. `{files}` is replaced with the
+      space-separated list of test files the pull request touched.
+
+        npx jest {files}
+        pytest {files}
+        go test ./...
+        ./gradlew test --tests {files}
+
+      If `{files}` is absent the command runs as-is, which is fine for runners
+      that cannot be scoped to a file list — just slower.
+    required: true
+
+  test-pattern:
+    description: |
+      Globs identifying test files, one per line. Defaults cover the common
+      conventions across JS, Python, Go, Java/Kotlin, Ruby and Rust.
+    required: false
+    default: ''
+
+  setup-command:
+    description: |
+      Run inside the base worktree before the tests, for dependency install.
+      Often unnecessary: see `link-paths`, which reuses what the job already
+      installed instead of installing it twice.
+    required: false
+    default: ''
+
+  link-paths:
+    description: |
+      Paths symlinked from the checkout into the base worktree, one per line,
+      so an already-installed dependency tree is reused rather than rebuilt.
+      Skipped silently when a path does not exist.
+    required: false
+    default: |
+      node_modules
+
+  junit-paths:
+    description: |
+      Directories searched for JUnit XML the run produced, one per line.
+      When a report is found it decides the verdict, because JUnit already
+      distinguishes an assertion failure from a test that never loaded — the
+      distinction this whole check turns on. Only files written during the run
+      are read, so a stale report cannot be mistaken for evidence.
+    required: false
+    default: |
+      .
+
+  base:
+    description: Base ref to compare against. Defaults to the pull request's base SHA.
+    required: false
+    default: ''
+
+  on-green:
+    description: |
+      What to do when every touched test still passes on base — the finding
+      this action exists to surface. `fail` (default), `warn`, or `pass`.
+    required: false
+    default: 'fail'
+
+  on-unrunnable:
+    description: |
+      What to do when the tests cannot execute against base at all, usually
+      because they reference code the pull request introduces. That is
+      typically a GOOD sign — the test genuinely depends on new work — so the
+      default is `pass`. Use `warn` to keep it visible.
+    required: false
+    default: 'pass'
+
+  comment:
+    description: |
+      Post the result as a pull request comment, updating the same comment on
+      re-runs rather than stacking duplicates.
+    required: false
+    default: 'true'
+
+  github-token:
+    description: Token used to post the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  outcome:
+    description: 'One of: red, green-on-base, unrunnable, not-applicable, error.'
+  tested-files:
+    description: Newline-separated test files that were evaluated.
+  report:
+    description: The full result as Markdown.
+
+runs:
+  using: composite
+  steps:
+    - name: redgreen
+      shell: bash
+      id: redgreen
+      run: node "$GITHUB_ACTION_PATH/src/main.js"
+      env:
+        INPUT_TEST_COMMAND: ${{ inputs.test-command }}
+        INPUT_TEST_PATTERN: ${{ inputs.test-pattern }}
+        INPUT_JUNIT_PATHS: ${{ inputs.junit-paths }}
+        INPUT_SETUP_COMMAND: ${{ inputs.setup-command }}
+        INPUT_LINK_PATHS: ${{ inputs.link-paths }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_ON_GREEN: ${{ inputs.on-green }}
+        INPUT_ON_UNRUNNABLE: ${{ inputs.on-unrunnable }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
