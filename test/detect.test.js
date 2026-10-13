@@ -150,3 +150,17 @@ test('never returns a negative count', () => {
   const removed = ["it('a', () => {", "it('b', () => {"];
   assert.equal(countAddedTestCases([], removed), 0);
 });
+
+test('build artifacts under a test directory are never selected', () => {
+  // Found by running postflight on a real project with a stray committed
+  // .pyc: pytest errored on the whole run and the verdict came back
+  // "unrecognised". One artifact should not be able to silence the check.
+  const files = [
+    'tests/test_bell.py',
+    'tests/__pycache__/test_bell.cpython-311-pytest-9.1.1.pyc',
+    'tests/fixtures/node_modules/x/test/a.test.js',
+    'spec/__snapshots__/a.spec.js.snap',
+    'test/build/Thing.class',
+  ];
+  assert.deepEqual(selectTestFiles(files), ['tests/test_bell.py']);
+});

@@ -100,6 +100,18 @@ jobs:
           perl -0pi -e "s/\n  if \(\/\\\\bfor \(\?:nil.*?\n/\n/s" src/rspec.js
           expect_failure "rspec nil crash misread as missing code" src/rspec.js
 
+          # 8. a sampled test treated as if it were seeded. Measured on a
+          #    real Qiskit assertion, an unseeded shot-based test held 31.8%
+          #    of 400 runs — so this one line decides whether the verdict is
+          #    evidence or a coin toss.
+          sed -i 's|  const seeded = addedTestLines.some((l) => SEEDING_CALLS.some((re) => re.test(l)));|  const seeded = true;|' src/nondeterminism.js
+          expect_failure "sampled test treated as seeded" src/nondeterminism.js
+
+          # 9. the other direction: flagging ordinary deterministic tests. A
+          #    warning that fires everywhere is a warning nobody reads.
+          sed -i "s|  if (signals.length === 0) return { risk: 'none', signals: \[\], frameworks };||" src/nondeterminism.js
+          expect_failure "ordinary tests flagged as sampling" src/nondeterminism.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored

@@ -131,10 +131,28 @@ function normalise(path) {
  * Select the test files from a list of changed paths.
  * Returns them sorted, so reports and comments are stable across re-runs.
  */
+/**
+ * Never a test source, whatever the patterns say.
+ *
+ * The catch-all directory patterns (`**​/tests/**`) are deliberately broad,
+ * which means a committed build artifact under `tests/` gets selected —
+ * observed with a stray `tests/__pycache__/test_bell.cpython-311.pyc`, where
+ * pytest then errored on the whole run and the verdict came back
+ * "unrecognised". One stray file should not be able to silence the check.
+ */
+const NEVER_TESTS = [
+  /(^|\/)__pycache__\//, /\.pyc$/, /\.pyo$/,
+  /(^|\/)node_modules\//, /(^|\/)\.venv\//, /(^|\/)venv\//, /(^|\/)vendor\//,
+  /(^|\/)(?:dist|build|target|coverage|\.tox|\.pytest_cache|\.mypy_cache)\//,
+  /\.(?:class|jar|o|so|dylib|dll|exe|map|min\.js|lock|snap)$/,
+  /(^|\/)__snapshots__\//,
+];
+
 export function selectTestFiles(changedFiles, patterns = DEFAULT_PATTERNS) {
   const matchers = patterns.map(globToRegExp);
   return changedFiles
     .map(normalise)
     .filter((file) => matchers.some((re) => re.test(file)))
+    .filter((file) => !NEVER_TESTS.some((re) => re.test(file)))
     .sort();
 }

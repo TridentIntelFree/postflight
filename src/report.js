@@ -1,6 +1,7 @@
 // Turning a verdict into something a reviewer — or an agent — can act on.
 
 import { OUTCOME } from './classify.js';
+import { determinismAdvice } from './nondeterminism.js';
 
 const PRESENTATION = {
   [OUTCOME.RED]: {
@@ -66,6 +67,21 @@ export function buildReport(result) {
       detail: 'That is the normal shape of new work, not a fault.',
     };
   }
+
+  // "Inconclusive" otherwise explains a load error, which is the wrong story
+  // for a result that ran fine twice and disagreed with itself.
+  if (result.reason === 'not-reproducible') {
+    p = {
+      ...p,
+      icon: '🎲',
+      title: 'Not reproducible',
+      lead: 'The same test gave two different answers on the same base commit.',
+      detail:
+        'So there is nothing to conclude from it, in either direction — a ' +
+        'result that will not repeat is not evidence that a test captures the ' +
+        'change, nor that it fails to.',
+    };
+  }
   const lines = [];
 
   lines.push(MARKER);
@@ -109,6 +125,15 @@ export function buildReport(result) {
   if (result.diagnosis) {
     lines.push('');
     lines.push(result.diagnosis.explanation);
+  }
+
+  // A sampled, unseeded test makes everything above probabilistic, so say so
+  // next to the verdict rather than in a footnote. The author is the only one
+  // who can fix it.
+  const advice = determinismAdvice(result.determinism || {});
+  if (advice) {
+    lines.push('');
+    lines.push(advice);
   }
 
   if (result.evidence) {

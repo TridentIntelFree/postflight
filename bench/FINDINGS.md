@@ -638,3 +638,120 @@ does give structured **build** diagnostics, which is the compile-failure case
 — i.e. exactly the dangerous one. Worth doing next on that basis alone, and
 worth being honest that it will be a partial conversion rather than a clean
 one like this.
+
+---
+
+## 2026-10-13 — tests that sample: postflight's verdict assumed determinism
+
+Asked for "utility for quantum computing". The useful reading turned out to be
+a gap in the tool's central claim rather than a quantum feature:
+**"this test failed on base, therefore it captures your change" assumes the
+test is deterministic.** A sampled test can fail on base by luck, and then the
+claim is simply false. Quantum is the sharpest instance, not the only one.
+
+### Measured first, with real Qiskit
+
+Installed qiskit 2.5.2 and ran the same shot-based assertion 400 times each:
+
+| | assertion held |
+|---|---|
+| unseeded, loose bound, 100 shots | 2.5% |
+| unseeded, tight bound, 100 shots | **31.8%** |
+| unseeded, tight bound, 1024 shots | 12.5% |
+| seeded, same seed, 50 runs | **1 distinct result** |
+
+A 32% flip rate makes the verdict close to a coin toss. **Seeding removes it
+entirely.** That one table determined the whole design: the valuable thing is
+to notice and tell the author, not to engineer around it.
+
+### Confirmations cannot rescue it, and the numbers say so plainly
+
+postflight re-runs a RED verdict N times. At the measured 68% base-failure
+rate, 200k trials:
+
+```
+confirmations=0:  a non-reproducible RED survives 68.1%
+confirmations=1:                                  46.2%
+confirmations=3:                                  21.5%
+confirmations=6:                                   6.8%
+```
+
+Seven times the cost to still be wrong 1 in 15. So re-running is a backstop
+and the report says so in those words. Default raised 1 -> 3 for detected
+sampling; deliberately not higher, because a check that costs seven runs gets
+turned off.
+
+### The real finding: green-on-base was never confirmed
+
+Only RED was ever re-run, on the reasoning that it is "the verdict that
+asserts something". That reasoning was wrong, and quantum made it impossible
+to miss. **`green-on-base` is the verdict that ACCUSES the author**, and an
+unseeded test that passes on base by luck produces a false accusation exactly
+as readily as a false credit.
+
+Measured on a Qiskit pull request whose added test passes on base ~80% of the
+time (base applies no bias; the PR fixes that; the assertion sits near the
+50-shot boundary):
+
+| | verdict across 6 runs |
+|---|---|
+| before | `green-on-base` **6/6** — accused the author every time, never re-run |
+| after | `not-reproducible` **5/6**, `green-on-base` 1/6 |
+
+And on the mirror-image commit, where the test fails on base ~60% of the time:
+`not-reproducible` 4/6, `red` 2/6. Both directions now get checked; neither is
+fully solved, which the report states rather than hides.
+
+This asymmetry had been in the tool since confirmations were added. It was not
+a quantum bug. Quantum was just the first case where the flip rate was large
+enough to see.
+
+### Detection is about the added LINES, not the manifest
+
+A Qiskit repo is full of perfectly deterministic tests — `assert
+circuit.depth() == 3` samples nothing. So a sampling library in the manifest
+is explicitly **not** sufficient; the judgement reads the lines the pull
+request adds. Pinned by a test, because getting this wrong would fire the
+warning on every pull request in a quantum repo, and a warning that fires
+everywhere is one nobody reads.
+
+Two details worth keeping:
+
+- **`seed=None` is not a seed**, and neither is a bare `default_rng()`. They
+  are the explicit request for fresh randomness. Treating them as seeded would
+  silence the warning exactly where it belongs.
+- My own seeding pattern had this bug: `default_rng\(\s*\S` matches the
+  closing paren, so `default_rng()` read as *seeded*. Caught by the test
+  written for it, which is the only reason it is not in the shipped code.
+
+### A stray `.pyc` could silence the whole check
+
+Found while building the Qiskit lab. A committed
+`tests/__pycache__/test_bell.cpython-311.pyc` matched the broad `**/tests/**`
+catch-all, pytest errored on the whole run, and the verdict came back
+`unrecognised`. One build artifact should not be able to turn the check off,
+so `selectTestFiles` now excludes `__pycache__`, `node_modules`, `.venv`,
+`dist`/`build`/`target`/`coverage`, `__snapshots__`, and compiled extensions.
+
+That was my lab's fault and a real postflight defect at the same time.
+
+### No regressions
+
+express (29 commits) and click (30 commits): **0 verdict differences**. The
+determinism analysis reports `risk: none` throughout, which is the control
+that makes the quantum numbers above believable.
+
+123 tests. Five mutations caught; the two that decide whether a verdict is
+evidence or a coin toss are in CI.
+
+### Still open
+
+- The flip-rate measurements come from circuits I wrote. Qiskit's own test
+  suite is the obvious next benchmark — it is pytest-based and clonable — and
+  would answer how often real quantum projects add unseeded sampled tests. Not
+  done; the numbers above are about the *mechanism*, not about prevalence.
+- Shot-count heuristics are absent: a test with `shots=1_000_000` and a loose
+  bound is effectively deterministic, and is currently warned about anyway.
+  Reading the bound would need to understand the assertion, which is a much
+  larger job than reading the call.
+- cargo remains the last runner on output heuristics.

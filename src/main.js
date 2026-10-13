@@ -13,6 +13,7 @@ import { extractTestNames, coversAny, hasLoadError } from './cases.js';
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
+import { analyseDeterminism, confirmationsFor } from './nondeterminism.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -235,15 +236,45 @@ async function main() {
       }
     }
 
-    // Confirm a claim of proof before making it. A flaky test fails on base
-    // too, and crediting that as evidence is the most damaging thing this
-    // check can get wrong: it tells you a test has teeth when it does not.
-    // Only RED is re-run — it is the only verdict that asserts something, and
-    // paying the cost on ~a third of pull requests keeps the check cheap.
-    const confirmations = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
-    if (verdict.outcome === OUTCOME.RED && confirmations > 0) {
+    // Does this pull request's own test sample without seeding? If so its
+    // verdict is probabilistic, and both of the next two decisions change.
+    const determinism = analyseDeterminism({
+      addedTestLines: added,
+      manifestText: await manifestText(built.worktree, changed),
+    });
+    if (determinism.risk === 'unseeded') {
+      const what = determinism.signals.length > 1
+        ? `${determinism.signals.slice(0, -1).join(', ')} and ${determinism.signals.at(-1)}`
+        : determinism.signals[0];
+      log.warn(
+        `These tests ${what}, without seeding, so the verdict is probabilistic. ` +
+        'Re-running reduces that; only seeding removes it.'
+      );
+    }
+
+    // Confirm a verdict before standing behind it. A test that fails on base
+    // intermittently fails on base for reasons of its own, and crediting that
+    // as evidence is the most damaging thing this check can get wrong: it
+    // tells you a test has teeth when it does not.
+    //
+    // RED is always re-run — it is the verdict that claims something. GREEN
+    // ON BASE normally is not, because it costs a run on every pull request
+    // that has nothing wrong with it.
+    //
+    // But a sampled test breaks that reasoning. green-on-base is the verdict
+    // that ACCUSES the author, and an unseeded test that passed on base by
+    // luck produces a false accusation just as readily as a false credit. So
+    // when sampling is detected, both get confirmed. Quantum made this
+    // asymmetry impossible to miss; it was always there.
+    const configured = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
+    const confirmations = confirmationsFor(determinism.risk, configured);
+    const confirmable = verdict.outcome === OUTCOME.RED
+      || (verdict.outcome === OUTCOME.GREEN_ON_BASE && determinism.risk === 'unseeded');
+
+    if (confirmable && confirmations > 0) {
+      const expected = verdict.outcome;
       for (let i = 1; i <= confirmations; i++) {
-        log.info(`Confirming the failure is not flaky (${i}/${confirmations})…`);
+        log.info(`Confirming the result is reproducible (${i}/${confirmations})…`);
         const again = await runTests({
           command: narrowing || testCommand,
           files: built.overlaid,
@@ -252,20 +283,22 @@ async function main() {
         });
         const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
         const repeat = classify(again, againReport, addedNames);
-        if (repeat.outcome !== OUTCOME.RED) {
-          log.warn('The base failure did not reproduce — treating it as flaky.');
+        if (repeat.outcome !== expected) {
+          log.warn(`The base result did not reproduce (${expected} then ${repeat.outcome}).`);
           verdict = {
             outcome: OUTCOME.INCONCLUSIVE,
-            reason: 'flaky',
+            reason: 'not-reproducible',
             evidence:
-              'The tests failed against base on the first run and did not on a ' +
-              'repeat. A test that fails intermittently fails on base too, so ' +
-              'this cannot be counted as evidence either way.',
+              `The tests reported ${expected} against base on the first run and ` +
+              `${repeat.outcome} on a repeat. A result that does not reproduce is ` +
+              'not evidence either way, in either direction.',
           };
           break;
         }
       }
     }
+
+    verdict = { ...verdict, determinism };
 
     return finish({
       ...verdict,
@@ -277,6 +310,32 @@ async function main() {
   } finally {
     await built.cleanup();
   }
+}
+
+/**
+ * Read whichever dependency manifests this project has, so sampling
+ * libraries can be recognised. Read from the base worktree rather than the
+ * job's checkout, since that is the tree the tests actually ran against.
+ */
+const MANIFESTS = [
+  'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'setup.cfg',
+  'package.json', 'Gemfile', 'Cargo.toml',
+];
+
+async function manifestText(cwd, changedFiles = []) {
+  const names = new Set([
+    ...MANIFESTS,
+    // A requirements file under a non-standard name still counts when the
+    // pull request itself touched it.
+    ...changedFiles.filter((f) => /requirements.*\.txt$/.test(f)),
+  ]);
+  const parts = [];
+  for (const name of names) {
+    try {
+      parts.push(await readFile(join(cwd, name), 'utf8'));
+    } catch { /* not present; that is the common case */ }
+  }
+  return parts.join('\n');
 }
 
 /**
