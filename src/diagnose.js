@@ -68,10 +68,32 @@ export function missingNames(message = '') {
     /Cannot find module '([^']+)'/g,                    // Node CJS
     /does not provide an export named '([^']+)'/g,      // Node ESM
     /Cannot find name '([^']+)'/g,                      // TypeScript
+    // A bundler rewrites a named import to a property access, so a missing
+    // export never surfaces as an import error at all — it becomes
+    // `undefined`, then a TypeError at the call site. This is how vitest
+    // reported a test that never ran as an ordinary assertion failure.
+    // The trailing `\)?` matters: esbuild's rewrite produces
+    // `(0 , modulo) is not a function`, so the name is not adjacent to the
+    // phrase. Without it this matched nothing on the output that motivated it.
+    /\b(\w+)\)? is not a function/g,                    // JS runtime
+    /\b(\w+)\)? is not defined/g,                       // JS runtime
+    /Cannot read propert(?:y|ies) of undefined \(reading '([^']+)'\)/g,
     /\bundefined: (\w+)/g,                              // Go
-    /cannot find symbol[\s\S]{0,80}?symbol:\s+\w+ (\w+)/g, // Java
+    /cannot find function [`'"]?(\w+)/g,                // Rust
+    /cannot find value [`'"]?(\w+)/g,                   // Rust
+    // How cargo actually reports it, which is not either of the above:
+    //   error[E0432]: unresolved import `cg::modulo`
+    /unresolved import [`'"]?(?:[\w]+::)*(\w+)/g,       // Rust
+    // javac prints `cannot find symbol` and the detail on a later line, and
+    // they are not always within a few characters of each other.
+    /cannot find symbol[\s\S]{0,200}?symbol:\s+\w+ (\w+)/g, // Java
+    /symbol:\s+(?:method|variable|class) (\w+)/g,       // Java
     /Unresolved reference: (\w+)/g,                     // Kotlin
     /uninitialized constant (\w+)/g,                    // Ruby
+    // Ruby's wording for a method that is not there. Found by running
+    // postflight against a real rspec project, where the diagnosis came back
+    // "unknown" for a plainly new method.
+    /undefined method [`'"]?([A-Za-z_]\w*[?!=]?)['"`]? for/g,
   ];
   for (const re of patterns) {
     for (const m of String(message).matchAll(re)) names.add(m[1]);
@@ -95,11 +117,28 @@ function introducedByPullRequest(name, { addedSourceLines = [], changedFiles = [
   })) return true;
 
   const declares = new RegExp(
-    `\\b(?:export\\s+)?(?:function|const|let|var|class|def|type|interface|fn|func|struct)\\s+${escape(leaf)}\\b`
+    // `def self.modulo` and `def Calc.modulo` are how Ruby declares the
+    // module method an rspec example reaches for, so the receiver has to be
+    // allowed between the keyword and the name.
+    `\\b(?:export\\s+)?(?:function|const|let|var|class|def|type|interface|fn|func|struct)\\s+`
+    + `(?:[A-Za-z_]\\w*\\.)?${escape(leaf)}\\b`
     + `|\\bexport\\s*\\{[^}]*\\b${escape(leaf)}\\b`
     + `|\\b${escape(leaf)}\\s*[:=]\\s*(?:function|\\(|async)`
   );
-  return addedSourceLines.some((l) => declares.test(l));
+  if (addedSourceLines.some((l) => declares.test(l))) return true;
+
+  // The C family declares a method with a return type and no keyword at all —
+  // `public static int modulo(int a, int b)` — so none of the above sees it.
+  // Found by running postflight against a real Maven project, where the
+  // diagnosis blamed a missing dependency for a method the PR plainly added.
+  //
+  // The leading word is a type, so statement keywords have to be excluded or
+  // an ordinary `return modulo(a, b);` would read as a declaration.
+  const cFamily = new RegExp(
+    `(^|[^.\\w])(?!return\\b|new\\b|if\\b|while\\b|for\\b|switch\\b|catch\\b|throw\\b|else\\b|case\\b)`
+    + `[A-Za-z_]\\w*(?:<[^>]*>)?(?:\\[\\])?\\s+${escape(leaf)}\\s*\\(`
+  );
+  return addedSourceLines.some((l) => cFamily.test(l));
 }
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

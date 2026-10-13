@@ -13,6 +13,7 @@ import { extractTestNames, coversAny, hasLoadError } from './cases.js';
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
+import { analyseDeterminism, confirmationsFor } from './nondeterminism.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -214,36 +215,122 @@ async function main() {
     // "unrecognised" is already the more specific of the two.
     const diagnosable = verdict.outcome === OUTCOME.INCONCLUSIVE
       && (verdict.reason === 'load-error' || verdict.reason === 'unrecognised');
-    if (diagnosable) {
-      const sourceFiles2 = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
-      const src = sourceFiles2.length
-        ? await changedLines(baseSha, headSha, sourceFiles2)
-        : { added: [] };
+
+    // What this pull request's non-test files add, and what it did to its
+    // dependency manifests. Both verdict corrections below need it, so it is
+    // gathered once rather than inside each.
+    const needsSourceContext = diagnosable || verdict.outcome === OUTCOME.RED;
+    let addedSourceLines = [];
+    let dependencyDiff = [];
+    if (needsSourceContext) {
+      const plainSource = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
+      if (plainSource.length) {
+        addedSourceLines = (await changedLines(baseSha, headSha, plainSource)).added;
+      }
       const depFiles = changed.filter(isDependencyFile);
-      const dep = depFiles.length
-        ? await changedLines(baseSha, headSha, depFiles)
-        : { added: [], removed: [] };
-      const d = diagnoseLoadError({
-        message: `${verdict.evidence || ''}\n${run.output || ''}`,
-        addedSourceLines: src.added,
-        changedFiles: changed,
-        dependencyDiff: [...dep.added, ...dep.removed],
-      });
+      if (depFiles.length) {
+        const dep = await changedLines(baseSha, headSha, depFiles);
+        dependencyDiff = [...dep.added, ...dep.removed];
+      }
+    }
+    const diagnose = (message) =>
+      diagnoseLoadError({ message, addedSourceLines, changedFiles: changed, dependencyDiff });
+
+    if (diagnosable) {
+      const d = diagnose(`${verdict.evidence || ''}\n${run.output || ''}`);
       if (d.kind !== 'unknown' || verdict.reason === 'load-error') {
         log.info(`Could not run on base: ${d.kind}`);
         verdict = { ...verdict, reason: d.kind, diagnosis: d };
       }
     }
 
-    // Confirm a claim of proof before making it. A flaky test fails on base
-    // too, and crediting that as evidence is the most damaging thing this
-    // check can get wrong: it tells you a test has teeth when it does not.
-    // Only RED is re-run — it is the only verdict that asserts something, and
-    // paying the cost on ~a third of pull requests keeps the check cheap.
-    const confirmations = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
-    if (verdict.outcome === OUTCOME.RED && confirmations > 0) {
+    // A "failure" that is really the test not reaching code this pull request
+    // introduces.
+    //
+    // Some runners report that as an ordinary assertion failure, because by
+    // the time it goes wrong there is nothing left that looks like an import
+    // error. vitest is the clearest case: esbuild rewrites a named import to
+    // a property access, so a missing export becomes `undefined` and then
+    // `TypeError: (0, modulo) is not a function` at the call site — with
+    // `errors="0" failures="1"` in the JUnit report. Taken at face value that
+    // reads as proof, and vitest is one of the most used runners there is.
+    //
+    // Pattern-matching the message cannot settle it, because the same
+    // TypeError is a genuine observation when the code does exist. What
+    // settles it is evidence already to hand: does this pull request DECLARE
+    // the name that went missing? If it does, the base commit cannot have had
+    // it, so nothing was observed. That reasoning is runner-agnostic, which is
+    // the point — the next runner to do this will be covered too.
+    if (verdict.outcome === OUTCOME.RED) {
+      // Per proven case where possible. One case failing for want of new code
+      // must not discard a sibling case that genuinely disagreed with base.
+      const provenMessages = verdict.cases?.proven?.length
+        ? verdict.cases.proven.map((c) => c.message || '')
+        : [`${verdict.evidence || ''}`];
+      const diagnoses = provenMessages.map(diagnose);
+      if (diagnoses.length && diagnoses.every((d) => d.kind === 'references-new-code')) {
+        const names = [...new Set(diagnoses.flatMap((d) => d.names))];
+        log.warn(
+          `The base "failure" is this pull request's own ${names.join(', ')} ` +
+          'being absent, not a test observing the old behaviour.'
+        );
+        verdict = {
+          ...verdict,
+          outcome: OUTCOME.INCONCLUSIVE,
+          reason: 'references-new-code',
+          diagnosis: diagnoses[0],
+          // The per-case table is built from this, and leaving the case under
+          // `proven` would print "failed — captures the change" directly under
+          // a headline saying nothing was proven. It did not run; it belongs
+          // with the other things that did not.
+          cases: verdict.cases && {
+            ...verdict.cases,
+            proven: [],
+            loadErrors: [...verdict.cases.loadErrors, ...verdict.cases.proven],
+          },
+        };
+      }
+    }
+
+    // Does this pull request's own test sample without seeding? If so its
+    // verdict is probabilistic, and both of the next two decisions change.
+    const determinism = analyseDeterminism({
+      addedTestLines: added,
+      manifestText: await manifestText(built.worktree, changed),
+    });
+    if (determinism.risk === 'unseeded') {
+      const what = determinism.signals.length > 1
+        ? `${determinism.signals.slice(0, -1).join(', ')} and ${determinism.signals.at(-1)}`
+        : determinism.signals[0];
+      log.warn(
+        `These tests ${what}, without seeding, so the verdict is probabilistic. ` +
+        'Re-running reduces that; only seeding removes it.'
+      );
+    }
+
+    // Confirm a verdict before standing behind it. A test that fails on base
+    // intermittently fails on base for reasons of its own, and crediting that
+    // as evidence is the most damaging thing this check can get wrong: it
+    // tells you a test has teeth when it does not.
+    //
+    // RED is always re-run — it is the verdict that claims something. GREEN
+    // ON BASE normally is not, because it costs a run on every pull request
+    // that has nothing wrong with it.
+    //
+    // But a sampled test breaks that reasoning. green-on-base is the verdict
+    // that ACCUSES the author, and an unseeded test that passed on base by
+    // luck produces a false accusation just as readily as a false credit. So
+    // when sampling is detected, both get confirmed. Quantum made this
+    // asymmetry impossible to miss; it was always there.
+    const configured = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
+    const confirmations = confirmationsFor(determinism.risk, configured);
+    const confirmable = verdict.outcome === OUTCOME.RED
+      || (verdict.outcome === OUTCOME.GREEN_ON_BASE && determinism.risk === 'unseeded');
+
+    if (confirmable && confirmations > 0) {
+      const expected = verdict.outcome;
       for (let i = 1; i <= confirmations; i++) {
-        log.info(`Confirming the failure is not flaky (${i}/${confirmations})…`);
+        log.info(`Confirming the result is reproducible (${i}/${confirmations})…`);
         const again = await runTests({
           command: narrowing || testCommand,
           files: built.overlaid,
@@ -252,20 +339,22 @@ async function main() {
         });
         const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
         const repeat = classify(again, againReport, addedNames);
-        if (repeat.outcome !== OUTCOME.RED) {
-          log.warn('The base failure did not reproduce — treating it as flaky.');
+        if (repeat.outcome !== expected) {
+          log.warn(`The base result did not reproduce (${expected} then ${repeat.outcome}).`);
           verdict = {
             outcome: OUTCOME.INCONCLUSIVE,
-            reason: 'flaky',
+            reason: 'not-reproducible',
             evidence:
-              'The tests failed against base on the first run and did not on a ' +
-              'repeat. A test that fails intermittently fails on base too, so ' +
-              'this cannot be counted as evidence either way.',
+              `The tests reported ${expected} against base on the first run and ` +
+              `${repeat.outcome} on a repeat. A result that does not reproduce is ` +
+              'not evidence either way, in either direction.',
           };
           break;
         }
       }
     }
+
+    verdict = { ...verdict, determinism };
 
     return finish({
       ...verdict,
@@ -277,6 +366,32 @@ async function main() {
   } finally {
     await built.cleanup();
   }
+}
+
+/**
+ * Read whichever dependency manifests this project has, so sampling
+ * libraries can be recognised. Read from the base worktree rather than the
+ * job's checkout, since that is the tree the tests actually ran against.
+ */
+const MANIFESTS = [
+  'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'setup.cfg',
+  'package.json', 'Gemfile', 'Cargo.toml',
+];
+
+async function manifestText(cwd, changedFiles = []) {
+  const names = new Set([
+    ...MANIFESTS,
+    // A requirements file under a non-standard name still counts when the
+    // pull request itself touched it.
+    ...changedFiles.filter((f) => /requirements.*\.txt$/.test(f)),
+  ]);
+  const parts = [];
+  for (const name of names) {
+    try {
+      parts.push(await readFile(join(cwd, name), 'utf8'));
+    } catch { /* not present; that is the common case */ }
+  }
+  return parts.join('\n');
 }
 
 /**

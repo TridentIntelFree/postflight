@@ -62,6 +62,7 @@ requests** — telling authors their tests had teeth when they did not.
 | ✅ **Proven** | A touched test failed an assertion on base. It ran against the old code, observed it, and disagreed. |
 | ❌ **Not proven** | Every touched test also passes on base. Whatever they check, it isn't what this PR changed. |
 | ⚠️ **Inconclusive** | The tests couldn't run on base at all. Nothing proven either way — but postflight says *why*, and one of the reasons isn't a problem. |
+| 🎲 **Not reproducible** | The same test gave two different answers on the same base commit. See [tests that sample](#tests-that-sample-quantum-monte-carlo-property-based). |
 | ➖ **Not applicable** | No test files touched. |
 
 ### "Couldn't run" is four different things
@@ -104,13 +105,79 @@ in the log which applies:
 
 | | Runners |
 |---|---|
-| **JUnit XML** — read directly, nothing inferred | vitest, mocha, node:test\*, pytest, gradle, maven |
-| **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`) |
-| **Reading output** — the fragile path | cargo, rspec |
+| **JUnit XML** — read directly, nothing inferred | vitest\*, mocha, node:test\*, pytest, gradle, maven |
+| **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`), rspec (`--format json`) |
+| **Reading output** — the fragile path | cargo |
 
 Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is
 the one failure this tool must not have.
+
+### Tests that sample: quantum, Monte Carlo, property-based
+
+The verdict above assumes the test is **deterministic**. A test that samples
+can fail on base by luck, and then "it captures your change" is simply false.
+
+This is not a corner case. Measured on a real Qiskit shot-based assertion,
+400 runs each:
+
+| | assertion held |
+|---|---|
+| unseeded, tight bound, 100 shots | **31.8%** of runs |
+| unseeded, tight bound, 1024 shots | 12.5% |
+| seeded, same seed, 50 runs | 1 distinct result |
+
+At a 32% flip rate the verdict is close to a coin toss. So postflight reads
+the lines your PR adds, and when they sample without seeding it:
+
+1. **says so, next to the verdict** — because seeding is the only real fix and
+   only you can apply it;
+2. raises `confirmations` to 3;
+3. **also re-runs a `not proven` result**, which it otherwise never does.
+
+That third point is the one quantum made obvious. `not proven` is the verdict
+that *accuses* an author, and an unseeded test that passed on base by luck
+produces a false accusation exactly as readily as a false credit. Measured on
+a Qiskit PR whose test passes on base ~80% of the time: the old behaviour
+emitted that accusation on **100%** of runs and never re-ran it; now 5 of 6
+runs report 🎲 *Not reproducible* instead.
+
+**Re-running mitigates, it does not fix.** At the measured 68% base-failure
+rate, even six extra runs let a non-reproducible result through 6.8% of the
+time, for seven times the cost. The number that matters is in the advice.
+
+Recognised: `qiskit`, `cirq`, `pennylane`, `pytket`, `braket`, `qutip`,
+`strawberryfields`, `pyquil`, `projectq`, `qsharp`, `hypothesis`, `faker`,
+plus unseeded `numpy.random` / `random` / `torch` / `tf.random` in any project.
+A sampling library in your manifest is **not** enough on its own — the
+judgement is about what the added test lines do, since a Qiskit repo is full
+of perfectly deterministic tests.
+
+### When a runner calls a load error a failure
+
+Two of the ten do, in different ways, and both were found by running
+postflight against real projects rather than reasoning about the report
+format. Both produced a false **✅ Proven** for a test that never executed —
+the worst error this tool can make.
+
+**vitest** is the subtler one, and the cause is a bundler rather than the
+reporter. esbuild rewrites a named import to a property access, so a missing
+export never surfaces as an import error: it silently becomes `undefined` and
+the only symptom is `TypeError: (0 , modulo) is not a function` at the call
+site, reported as `errors="0" failures="1"`. There is nothing in the output to
+recognise, and vitest is not lying — from its point of view a call returned
+the wrong thing.
+
+So postflight does not pattern-match the message. It uses evidence already to
+hand: **does this pull request declare the name that went missing?** If it
+does, the base commit cannot have had it, so nothing was observed and the
+verdict is downgraded. That reasoning is runner-agnostic, which is the point —
+the next runner to do this is covered too.
+
+The guard matters as much as the rule. A `TypeError` about code the base
+commit *does* have is a real observation of old behaviour, and discarding it
+would throw away a true finding. Measured across 59 real commits of express
+and click, the downgrade fired **zero** times.
 
 \* node:test emits JUnit XML but does not use `<error>` at all. Any failure it
 cannot pin on a named test — an unimportable file, a top-level assertion, an

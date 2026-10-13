@@ -15,6 +15,7 @@
 import { readFile, access } from 'node:fs/promises';
 import { parseGoJson } from './gotest.js';
 import { parseJestJson } from './jestjson.js';
+import { parseRspecJson } from './rspec.js';
 import { join } from 'node:path';
 
 const REPORT = 'postflight-report.xml';
@@ -103,8 +104,15 @@ const RUNNERS = {
     filter: (names) => `-Dtest=${quote(names.join(','))}`,
   },
   rspec: {
-    command: 'bundle exec rspec {files}',
+    // No JUnit without the separate rspec_junit_formatter gem, which cannot
+    // be assumed present — but rspec's own JSON formatter is built in and
+    // names the run/never-ran distinction outright
+    // (`errors_outside_of_examples_count`). Written to a file so rspec's
+    // progress output can still go to the terminal.
+    command: `bundle exec rspec {files} --format json --out ${JSON_REPORT} --format progress`,
     junit: false,
+    reportFile: JSON_REPORT,
+    parse: parseRspecJson,
     filter: (names) => names.map((n) => `-e ${quote(n)}`).join(' '),
   },
 };
@@ -145,7 +153,15 @@ export async function detectRunner(dir = process.cwd()) {
 
   if (await exists(dir, 'go.mod')) return named('go');
   if (await exists(dir, 'Cargo.toml')) return named('cargo');
-  if (await exists(dir, 'build.gradle') || await exists(dir, 'build.gradle.kts')) return named('gradle');
+  if (await exists(dir, 'build.gradle') || await exists(dir, 'build.gradle.kts')) {
+    // The wrapper is the right thing to use when the project commits one,
+    // because it pins the Gradle version. Many do not, and hardcoding
+    // `./gradlew` meant those projects could never be checked at all — the
+    // run reported `command-unavailable` and stopped. Found by auditing the
+    // runners against real projects rather than assuming.
+    const wrapper = await exists(dir, 'gradlew');
+    return { ...named('gradle'), command: `${wrapper ? './gradlew' : 'gradle'} test` };
+  }
   if (await exists(dir, 'pom.xml')) return named('maven');
   if (/\brspec\b/.test(await readText(dir, 'Gemfile'))) return named('rspec');
 

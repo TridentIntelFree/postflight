@@ -547,3 +547,317 @@ works.** The project's whole thesis, found twice in its own CI — once in a
 test that didn't test what it claimed (PR #4), once in a mutation that didn't
 mutate. Verify the harness, not just the result. Run the CI block locally
 before pushing.
+
+---
+
+## 2026-10-13 — rspec via its own JSON formatter
+
+Driven by the previous entry's lesson: **for every runner, test the
+import-failure path specifically.** cargo and rspec were the two left guessing
+from prose. rspec first, because its JSON formatter is built in and stable —
+no extra gem, unlike `rspec_junit_formatter`.
+
+Everything below was captured by installing rspec and running it against real
+Ruby code. Three fixtures committed.
+
+### What rspec's JSON gives, for free
+
+```
+errors_outside_of_examples_count   a spec file could not be loaded
+examples[].status                  passed / failed / pending
+examples[].exception.class         WHY it failed — the whole judgement
+```
+
+**rspec aborts the entire run on any load error.** `example_count` is 0 even
+for spec files that were perfectly loadable — unlike jest, which runs the
+healthy suites anyway. That makes rspec the one runner so far that *cannot*
+produce the mixed report that caught both jest and node:test, because a real
+result never sits beside a load error.
+
+### The judgement that matters, and it is not the load error
+
+rspec reports a Ruby exception raised **inside** an example as
+`status: "failed"`, identical to a failed expectation. So "failed" alone
+cannot be read as proof — this runner's version of the node:test bug.
+
+`exception.class` settles it, and the list has to be named rather than a
+catch-all, because both directions are costly:
+
+| Exception | Verdict | Why |
+|---|---|---|
+| `RSpec::Expectations::ExpectationNotMetError` | failure | ran and disagreed |
+| `ZeroDivisionError`, `TypeError`, `RuntimeError` | failure | code exists and misbehaved — a real observation |
+| `NoMethodError`, `NameError`, `LoadError` | error | the name is not there |
+
+**`NoMethodError` sits on both sides of that line**, and the message says
+which. Verified, not assumed:
+
+```
+undefined method `modulo' for module Calc   the method is not there
+undefined method `fetch' for nil            the code RAN and hit a nil
+```
+
+The second is the classic Ruby bug a fix like this captures. Reading it as
+"could not run" would discard a true finding, so a nil receiver stays a
+failure. A blanket "any Ruby exception is a load error" rule would have been
+wrong on exactly the commits worth catching.
+
+### End to end, zero configuration
+
+A real rspec repo, no `test-command`, three separate runs:
+
+| Pull request | Verdict |
+|---|---|
+| real fix + test using existing methods | `✅ Proven`, narrowed to the 1 added case |
+| test calling a method the PR adds | `➖ Nothing to prove yet (references-new-code)` |
+| spec file that will not load | `⚠️ inconclusive (load-error)` |
+
+Four mutations caught, two added to CI: treating every rspec failure as
+missing code, and the reverse. Both are one-line changes that would silently
+invert the verdict on real Ruby pull requests.
+
+### Two bugs in yesterday's work, found only by running this
+
+`diagnose.js` returned `unknown` for a plainly new Ruby method. Two gaps,
+neither visible from the unit tests:
+
+- `missingNames()` had no pattern for Ruby's `undefined method` wording — it
+  only knew `uninitialized constant`.
+- `introducedByPullRequest()` matched `def modulo` but not `def self.modulo`,
+  which is how Ruby declares the module method an example reaches for.
+
+So **`references-new-code` has now fired on a real project**, not only the
+purpose-built JS repo. That closes one of the three "could not verify" items
+from PR #8 — and it closed by finding two defects, which is the usual way.
+
+### Still on heuristics
+
+cargo alone. On stable Rust, `cargo test -- --format json` needs
+`-Z unstable-options`, so libtest results are prose; `--message-format json`
+does give structured **build** diagnostics, which is the compile-failure case
+— i.e. exactly the dangerous one. Worth doing next on that basis alone, and
+worth being honest that it will be a partial conversion rather than a clean
+one like this.
+
+---
+
+## 2026-10-13 — tests that sample: postflight's verdict assumed determinism
+
+Asked for "utility for quantum computing". The useful reading turned out to be
+a gap in the tool's central claim rather than a quantum feature:
+**"this test failed on base, therefore it captures your change" assumes the
+test is deterministic.** A sampled test can fail on base by luck, and then the
+claim is simply false. Quantum is the sharpest instance, not the only one.
+
+### Measured first, with real Qiskit
+
+Installed qiskit 2.5.2 and ran the same shot-based assertion 400 times each:
+
+| | assertion held |
+|---|---|
+| unseeded, loose bound, 100 shots | 2.5% |
+| unseeded, tight bound, 100 shots | **31.8%** |
+| unseeded, tight bound, 1024 shots | 12.5% |
+| seeded, same seed, 50 runs | **1 distinct result** |
+
+A 32% flip rate makes the verdict close to a coin toss. **Seeding removes it
+entirely.** That one table determined the whole design: the valuable thing is
+to notice and tell the author, not to engineer around it.
+
+### Confirmations cannot rescue it, and the numbers say so plainly
+
+postflight re-runs a RED verdict N times. At the measured 68% base-failure
+rate, 200k trials:
+
+```
+confirmations=0:  a non-reproducible RED survives 68.1%
+confirmations=1:                                  46.2%
+confirmations=3:                                  21.5%
+confirmations=6:                                   6.8%
+```
+
+Seven times the cost to still be wrong 1 in 15. So re-running is a backstop
+and the report says so in those words. Default raised 1 -> 3 for detected
+sampling; deliberately not higher, because a check that costs seven runs gets
+turned off.
+
+### The real finding: green-on-base was never confirmed
+
+Only RED was ever re-run, on the reasoning that it is "the verdict that
+asserts something". That reasoning was wrong, and quantum made it impossible
+to miss. **`green-on-base` is the verdict that ACCUSES the author**, and an
+unseeded test that passes on base by luck produces a false accusation exactly
+as readily as a false credit.
+
+Measured on a Qiskit pull request whose added test passes on base ~80% of the
+time (base applies no bias; the PR fixes that; the assertion sits near the
+50-shot boundary):
+
+| | verdict across 6 runs |
+|---|---|
+| before | `green-on-base` **6/6** — accused the author every time, never re-run |
+| after | `not-reproducible` **5/6**, `green-on-base` 1/6 |
+
+And on the mirror-image commit, where the test fails on base ~60% of the time:
+`not-reproducible` 4/6, `red` 2/6. Both directions now get checked; neither is
+fully solved, which the report states rather than hides.
+
+This asymmetry had been in the tool since confirmations were added. It was not
+a quantum bug. Quantum was just the first case where the flip rate was large
+enough to see.
+
+### Detection is about the added LINES, not the manifest
+
+A Qiskit repo is full of perfectly deterministic tests — `assert
+circuit.depth() == 3` samples nothing. So a sampling library in the manifest
+is explicitly **not** sufficient; the judgement reads the lines the pull
+request adds. Pinned by a test, because getting this wrong would fire the
+warning on every pull request in a quantum repo, and a warning that fires
+everywhere is one nobody reads.
+
+Two details worth keeping:
+
+- **`seed=None` is not a seed**, and neither is a bare `default_rng()`. They
+  are the explicit request for fresh randomness. Treating them as seeded would
+  silence the warning exactly where it belongs.
+- My own seeding pattern had this bug: `default_rng\(\s*\S` matches the
+  closing paren, so `default_rng()` read as *seeded*. Caught by the test
+  written for it, which is the only reason it is not in the shipped code.
+
+### A stray `.pyc` could silence the whole check
+
+Found while building the Qiskit lab. A committed
+`tests/__pycache__/test_bell.cpython-311.pyc` matched the broad `**/tests/**`
+catch-all, pytest errored on the whole run, and the verdict came back
+`unrecognised`. One build artifact should not be able to turn the check off,
+so `selectTestFiles` now excludes `__pycache__`, `node_modules`, `.venv`,
+`dist`/`build`/`target`/`coverage`, `__snapshots__`, and compiled extensions.
+
+That was my lab's fault and a real postflight defect at the same time.
+
+### No regressions
+
+express (29 commits) and click (30 commits): **0 verdict differences**. The
+determinism analysis reports `risk: none` throughout, which is the control
+that makes the quantum numbers above believable.
+
+123 tests. Five mutations caught; the two that decide whether a verdict is
+evidence or a coin toss are in CI.
+
+### Still open
+
+- The flip-rate measurements come from circuits I wrote. Qiskit's own test
+  suite is the obvious next benchmark — it is pytest-based and clonable — and
+  would answer how often real quantum projects add unseeded sampled tests. Not
+  done; the numbers above are about the *mechanism*, not about prevalence.
+- Shot-count heuristics are absent: a test with `shots=1_000_000` and a loose
+  bound is effectively deterministic, and is currently warned about anyway.
+  Reading the bound would need to understand the assertion, which is a much
+  larger job than reading the call.
+- cargo remains the last runner on output heuristics.
+
+---
+
+## 2026-10-13 — auditing every runner before adding anything
+
+"Before we add, let's test what we have." The right instinct: **three of the
+ten runners had never been run at all**, and the README called them the
+*reliable* tier — which is the tier node:test was in when it was handing out
+false proof.
+
+Every toolchain was available in the sandbox, so all four gaps were testable.
+Each runner got a two-commit lab and the one case that produces false proof: a
+test referencing code the pull request introduces.
+
+| Runner | Evidence before | Case B result |
+|---|---|---|
+| mocha, pytest | 59 real commits | ✅ safe |
+| jest, go, node:test, rspec | fixtures + end to end | ✅ safe |
+| cargo | **none** | ✅ safe — `inconclusive` |
+| maven | **none** | ✅ safe verdict, wrong diagnosis |
+| gradle | **none** | ✅ safe verdict, could not run at all |
+| **vitest** | **none** | ❌ **`red` — "✅ Proven"** |
+
+### vitest: false proof, and the cause is a bundler
+
+```
+| ✅ | modulo is non-negative | failed — captures the change |
+```
+
+The test never executed. esbuild rewrites a named import to a property
+access, so a missing export **never surfaces as an import error** — it becomes
+`undefined`, and the only symptom is at the call site:
+
+```xml
+<testsuites tests="3" failures="1" errors="0">
+  <failure message="(0 , modulo) is not a function" type="TypeError">
+```
+
+`errors="0"`. There is nothing in the output to recognise, and vitest is not
+wrong — from its point of view a call returned the wrong thing. This is the
+third runner in a row to defeat the JUnit `<failure>`/`<error>` distinction,
+in a third different way (mocha: no report; jest: empty `assertionResults`;
+node:test: mislabelled `<failure>`; vitest: no error at all).
+
+**So the fix is not another message pattern.** Pattern-matching cannot settle
+it, because the identical `TypeError` is a genuine observation when the code
+does exist. What settles it is evidence already to hand: **does this pull
+request DECLARE the name that went missing?** If so, base cannot have had it.
+
+That is runner-agnostic, and deliberately so — the next runner to do this is
+already covered. It is also destructive, since it discards a RED, so:
+
+- applied **per proven case**: one case failing for want of new code must not
+  discard a sibling that genuinely disagreed with base;
+- fires only on positive evidence (`references-new-code`), never on `unknown`,
+  `missing-dependency` or `dependency-drift`;
+- **measured: fired 0 times across 59 real commits** of express and click, 0
+  verdict and 0 reason differences. That control is what makes it trustworthy.
+
+A second bug fell out: the per-case table still printed "failed — captures the
+change" under a headline saying nothing was proven. Downgrading now moves the
+case out of `proven`.
+
+### maven: the diagnosis blamed the wrong thing
+
+Verdict was safe but it said `missing-dependency` for a method the pull
+request plainly added. Two gaps:
+
+- javac prints `cannot find symbol` and `symbol: method modulo(int,int)` on
+  separate lines, further apart than the old 80-character window allowed.
+- **the C family declares a method with a return type and no keyword** —
+  `public static int modulo(int a, int b)` — so none of the
+  function/def/fn/func patterns saw it.
+
+The C-family pattern needs a statement-keyword guard or an ordinary
+`return modulo(a, b);` reads as a declaration. Pinned by a test both ways.
+
+### gradle: could not check a project without a committed wrapper
+
+`command: './gradlew test'` was hardcoded. A project without a committed
+wrapper reported `command-unavailable` and stopped — it could never be checked
+at all. Now prefers `./gradlew` when present and falls back to `gradle`.
+
+The wrapper preference is right when it exists, since it pins the version;
+hardcoding it was the bug.
+
+### cargo was fine, and is worth saying
+
+`error[E0432]: unresolved import` is caught by the existing load-error
+markers, so the verdict was correct without any change. Only the *diagnosis*
+needed cargo's actual wording — which is `unresolved import`, not the
+`cannot find function` the first guess assumed.
+
+### After
+
+All ten runners verified on the false-proof case. 130 tests. Eleven mutations
+in CI. express and click: 0 differences.
+
+### Lesson
+
+**An unverified claim in a table is a claim.** The README listed vitest,
+gradle and maven in the most-reliable tier purely because their reporter was
+supposed to emit JUnit XML — the exact assumption that was already known to be
+false for node:test, written down in this file, and still repeated. Checking
+runners one at a time as they come up means the tenth is trusted for nine
+releases. Audit the whole table.

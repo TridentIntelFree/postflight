@@ -89,6 +89,41 @@ jobs:
           sed -i 's|  return dependencyDiff.some((l) => re.test(l));|  return true;|' src/diagnose.js
           expect_failure "drift blamed without evidence" src/diagnose.js
 
+          # 6. rspec reports a missing method and a failed expectation with
+          #    the SAME status. Reading the first as proof is this runner's
+          #    version of the node:test bug.
+          sed -i 's|function isMissingCode(exception) {|function isMissingCode(exception) { return false;|' src/rspec.js
+          expect_failure "rspec missing code read as a real failure" src/rspec.js
+
+          # 7. the other direction: a nil crash IS the old behaviour, and
+          #    calling it "could not run" throws away a true finding.
+          perl -0pi -e "s/\n  if \(\/\\\\bfor \(\?:nil.*?\n/\n/s" src/rspec.js
+          expect_failure "rspec nil crash misread as missing code" src/rspec.js
+
+          # 8. a sampled test treated as if it were seeded. Measured on a
+          #    real Qiskit assertion, an unseeded shot-based test held 31.8%
+          #    of 400 runs — so this one line decides whether the verdict is
+          #    evidence or a coin toss.
+          sed -i 's|  const seeded = addedTestLines.some((l) => SEEDING_CALLS.some((re) => re.test(l)));|  const seeded = true;|' src/nondeterminism.js
+          expect_failure "sampled test treated as seeded" src/nondeterminism.js
+
+          # 9. the other direction: flagging ordinary deterministic tests. A
+          #    warning that fires everywhere is a warning nobody reads.
+          sed -i "s|  if (signals.length === 0) return { risk: 'none', signals: \[\], frameworks };||" src/nondeterminism.js
+          expect_failure "ordinary tests flagged as sampling" src/nondeterminism.js
+
+          # 10. the bundler-rewritten TypeError no longer names its symbol.
+          #     Without this, vitest reports a test that never executed as
+          #     "✅ Proven" — the worst error this tool can make, in one of
+          #     the most widely used JS runners.
+          perl -0pi -e "s|    /\\\\b\(\\\\w\+\)\\\\\)\? is not a function/g,.*?\n||s" src/diagnose.js
+          expect_failure "bundler TypeError no longer names the symbol" src/diagnose.js
+
+          # 11. a C-family method declaration going unrecognised, which made
+          #     Maven blame a missing dependency for a method the PR added.
+          sed -i 's|  if (addedSourceLines.some((l) => declares.test(l))) return true;|  if (addedSourceLines.some((l) => declares.test(l))) return true; return false;|' src/diagnose.js
+          expect_failure "C-family declaration not recognised" src/diagnose.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored
