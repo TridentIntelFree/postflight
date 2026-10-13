@@ -85,33 +85,78 @@ export function extractTestNames(addedLines) {
 const normalise = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
+ * How well does a reported case correspond to a name taken from the diff?
+ * Higher is better; 0 means no correspondence at all.
+ *
+ * Scored rather than first-match-wins, because runners decorate names —
+ * mocha prefixes the suite, pytest appends parameters — so loose matching is
+ * necessary, and loose matching without ranking will happily pair
+ * `test_parse` with `test_parse_unicode` purely because it came first.
+ */
+export function scoreMatch(name, c) {
+  const n = normalise(name);
+  const cn = normalise(c.name);
+  const full = normalise(`${c.classname} ${c.name}`);
+
+  if (cn === n) return 100;
+  if (full === n) return 95;
+
+  // pytest parameterisation: test_rounds[0.1-0.2]
+  if (cn.startsWith(`${n}[`)) return 90;
+  // mocha suite prefixing: "calc > divides cleanly"
+  if (cn.endsWith(` ${n}`) || cn.endsWith(`> ${n}`)) return 85;
+  if (full.endsWith(` ${n}`)) return 80;
+
+  // Substring, either direction. Penalised by how much of the longer string
+  // is left unaccounted for, so the closest of several candidates wins.
+  if (cn.includes(n) || n.includes(cn)) {
+    const overlap = Math.min(n.length, cn.length);
+    const span = Math.max(n.length, cn.length);
+    return 30 + 40 * (overlap / span);
+  }
+  if (full.includes(n)) return 20;
+
+  return 0;
+}
+
+/**
  * Pair the names a pull request added with the results the runner reported.
  *
- * Matching is deliberately loose in both directions: runners decorate names
- * differently — mocha prefixes the suite, pytest appends parameters — and a
- * missed match silently drops a case from the verdict.
+ * Assignment is one-to-one and best-first. Without that, two added names
+ * whose text overlaps both claim the same reported case, and one of them is
+ * handed a verdict that belongs to the other.
  */
 export function matchCases(addedNames, junitCases) {
-  const results = [];
+  const candidates = [];
+  for (let i = 0; i < addedNames.length; i++) {
+    for (let j = 0; j < junitCases.length; j++) {
+      const score = scoreMatch(addedNames[i], junitCases[j]);
+      if (score > 0) candidates.push({ i, j, score });
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score);
 
-  for (const name of addedNames) {
-    const n = normalise(name);
-    const hit = junitCases.find((c) => {
-      const cn = normalise(c.name);
-      const full = normalise(`${c.classname} ${c.name}`);
-      return cn === n || cn.includes(n) || n.includes(cn) || full.includes(n);
-    });
-
-    results.push({
-      name,
-      matched: !!hit,
-      status: hit ? hit.status : 'unknown',
-      type: hit ? hit.type : null,
-      message: hit ? hit.message : '',
-    });
+  const takenName = new Set();
+  const takenCase = new Set();
+  const chosen = new Map();
+  for (const { i, j, score } of candidates) {
+    if (takenName.has(i) || takenCase.has(j)) continue;
+    takenName.add(i);
+    takenCase.add(j);
+    chosen.set(i, { hit: junitCases[j], score });
   }
 
-  return results;
+  return addedNames.map((name, i) => {
+    const c = chosen.get(i);
+    return {
+      name,
+      matched: !!c,
+      status: c ? c.hit.status : 'unknown',
+      type: c ? c.hit.type : null,
+      message: c ? c.hit.message : '',
+      score: c ? c.score : 0,
+    };
+  });
 }
 
 /**
