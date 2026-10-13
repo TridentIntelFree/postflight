@@ -1,0 +1,145 @@
+// Working out how to run a project's tests, so `test-command` can be optional.
+//
+// Two things are being solved here, and the second matters more.
+//
+// The obvious one is setup burden: a required `test-command` is a thing to get
+// wrong, and getting it wrong used to produce a confident verdict about a
+// command that never ran.
+//
+// The real one is structured output. Classification is reliable when the
+// runner writes JUnit XML and guesswork when it does not — every runner met so
+// far has broken the output heuristics on first contact. A detected runner can
+// be told to emit a report, so the reliable path becomes the default instead
+// of something a user has to know to ask for.
+
+import { readFile, access } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const REPORT = 'postflight-report.xml';
+
+const exists = async (dir, name) => {
+  try { await access(join(dir, name)); return true; } catch { return false; }
+};
+
+const readJson = async (dir, name) => {
+  try { return JSON.parse(await readFile(join(dir, name), 'utf8')); } catch { return null; }
+};
+
+const readText = async (dir, name) => {
+  try { return await readFile(join(dir, name), 'utf8'); } catch { return ''; }
+};
+
+/**
+ * Each runner declares how to run named files and, where it can, how to write
+ * a JUnit report.
+ *
+ * `junit: false` is honest rather than absent: those runners have no built-in
+ * report, so classification falls back to reading their output, and saying so
+ * is better than pretending the reliable path is available.
+ */
+const RUNNERS = {
+  vitest: {
+    command: `npx vitest run {files} --reporter=junit --outputFile=${REPORT}`,
+    junit: REPORT,
+    filter: (names) => `-t ${quote(names.join('|'))}`,
+  },
+  jest: {
+    // jest has no built-in JUnit reporter; jest-junit is a separate package we
+    // must not assume is installed.
+    command: 'npx jest {files} --ci',
+    junit: false,
+    filter: (names) => `-t ${quote(names.join('|'))}`,
+  },
+  mocha: {
+    command: `npx mocha {files} --reporter xunit --reporter-option output=${REPORT}`,
+    junit: REPORT,
+    filter: (names) => `--grep ${quote(names.join('|'))}`,
+  },
+  'node-test': {
+    command: 'node --test {files}',
+    junit: false,
+    filter: (names) => `--test-name-pattern ${quote(names.join('|'))}`,
+  },
+  pytest: {
+    command: `python -m pytest {files} -q --junitxml=${REPORT}`,
+    junit: REPORT,
+    filter: (names) => `-k ${quote(names.join(' or '))}`,
+  },
+  go: {
+    // `go test` takes packages, not files, and has no JUnit output.
+    command: 'go test ./...',
+    junit: false,
+    filter: (names) => `-run ${quote(`^(${names.join('|')})$`)}`,
+  },
+  cargo: {
+    command: 'cargo test',
+    junit: false,
+    filter: (names) => names.join(' '),
+  },
+  gradle: {
+    // Gradle writes JUnit XML under build/test-results by default.
+    command: './gradlew test',
+    junit: 'build/test-results',
+    filter: (names) => names.map((n) => `--tests ${quote(`*${n}`)}`).join(' '),
+  },
+  maven: {
+    command: 'mvn -B test',
+    junit: 'target/surefire-reports',
+    filter: (names) => `-Dtest=${quote(names.join(','))}`,
+  },
+  rspec: {
+    command: 'bundle exec rspec {files}',
+    junit: false,
+    filter: (names) => names.map((n) => `-e ${quote(n)}`).join(' '),
+  },
+};
+
+function quote(value) {
+  return /^[\w@%+=:,./^$()|-]+$/.test(value) ? value : `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Identify the test runner a repository uses.
+ * Returns null when nothing is recognised, so the caller can ask the user
+ * rather than guess.
+ */
+export async function detectRunner(dir = process.cwd()) {
+  const pkg = await readJson(dir, 'package.json');
+  if (pkg) {
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const script = String(pkg.scripts?.test || '');
+
+    // The declared test script is the strongest signal available: it is what
+    // the project itself says the command is.
+    if (/\bvitest\b/.test(script) || deps.vitest) return named('vitest');
+    if (/\bjest\b/.test(script) || deps.jest) return named('jest');
+    if (/\bmocha\b/.test(script) || deps.mocha) return named('mocha');
+    if (/node\s+--test|node:test/.test(script)) return named('node-test');
+  }
+  if (await exists(dir, 'vitest.config.ts') || await exists(dir, 'vitest.config.js')) return named('vitest');
+  if (await exists(dir, 'jest.config.js') || await exists(dir, 'jest.config.ts')) return named('jest');
+  if (await exists(dir, '.mocharc.json') || await exists(dir, '.mocharc.yml')) return named('mocha');
+
+  const pyproject = await readText(dir, 'pyproject.toml');
+  if (/\bpytest\b/.test(pyproject)
+      || await exists(dir, 'pytest.ini')
+      || await exists(dir, 'tox.ini')
+      || /\bpytest\b/.test(await readText(dir, 'setup.cfg'))) {
+    return named('pytest');
+  }
+
+  if (await exists(dir, 'go.mod')) return named('go');
+  if (await exists(dir, 'Cargo.toml')) return named('cargo');
+  if (await exists(dir, 'build.gradle') || await exists(dir, 'build.gradle.kts')) return named('gradle');
+  if (await exists(dir, 'pom.xml')) return named('maven');
+  if (/\brspec\b/.test(await readText(dir, 'Gemfile'))) return named('rspec');
+
+  return null;
+}
+
+function named(name) {
+  return { name, ...RUNNERS[name] };
+}
+
+export const KNOWN_RUNNERS = Object.keys(RUNNERS);
+export { RUNNERS, REPORT };

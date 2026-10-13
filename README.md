@@ -12,9 +12,18 @@ aren't testing what you changed.
     fetch-depth: 0          # both sides of the comparison must be present
 
 - uses: TridentIntelFree/postflight@v1
-  with:
-    test-command: npx jest {files}
 ```
+
+That is the whole configuration. The runner is detected from your
+repository — `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`,
+`build.gradle`, `pom.xml`, `Gemfile` — and told to write a JUnit report where
+it can, because reading a report beats guessing at output. Measured across 53
+commits of two projects in two languages, detection produced **identical
+verdicts to a hand-written command**.
+
+Set `test-command` yourself when you need to; it always wins. If nothing is
+recognised, postflight says so and asks, rather than guessing at a command and
+reporting a confident verdict about something that never ran.
 
 ## Why
 
@@ -116,7 +125,7 @@ Getting to those numbers took three fixes that only real history exposed:
 
 | Input | Default | |
 |---|---|---|
-| `test-command` | — | **Required.** `{files}` is replaced with the touched test files. |
+| `test-command` | detected | `{files}` is replaced with the touched test files. Optional. |
 | `test-pattern` | common conventions | Globs identifying test files, one per line. |
 | `junit-paths` | `.` | Where to look for JUnit XML the run produced. |
 | `setup-command` | — | Run in the base worktree before the tests. |

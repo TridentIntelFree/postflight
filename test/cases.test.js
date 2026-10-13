@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractTestNames, matchCases, summariseCases } from '../src/cases.js';
+import { extractTestNames, matchCases, summariseCases, scoreMatch } from '../src/cases.js';
 
 // Name extraction is the load-bearing part: a name that is not extracted
 // silently drops its test from the verdict, and a verdict built from a subset
@@ -111,4 +111,87 @@ test('summary is usable when only some names matched', () => {
   const s = summariseCases(matchCases(['divides', 'nothing like this'], cases));
   assert.equal(s.usable, true);
   assert.equal(s.unmatched.length, 1);
+});
+
+// --- matching precision ----------------------------------------------------
+//
+// A wrong match is worse than no match: it hands a case the verdict belonging
+// to a different test, silently. These pin down the two ways that happens.
+
+const mk = (name, status, type = null, classname = '') =>
+  ({ name, classname, status, type, message: '' });
+
+test('an exact match beats a substring match that comes first', () => {
+  // `test_parse_unicode` contains `test_parse`. First-match-wins would pair
+  // the added `test_parse` with it and report the wrong result.
+  const junit = [
+    mk('test_parse_unicode', 'failed', 'failure'),
+    mk('test_parse', 'passed'),
+  ];
+  const r = matchCases(['test_parse'], junit);
+  assert.equal(r[0].status, 'passed', 'must pair with the exact name, not the longer one');
+});
+
+test('two overlapping names do not claim the same reported case', () => {
+  // Without one-to-one assignment both added names grab `test_parse_unicode`
+  // and one of them inherits a verdict it did not earn.
+  const junit = [
+    mk('test_parse', 'passed'),
+    mk('test_parse_unicode', 'failed', 'failure'),
+  ];
+  const r = matchCases(['test_parse', 'test_parse_unicode'], junit);
+  assert.equal(r[0].status, 'passed');
+  assert.equal(r[1].status, 'failed');
+  assert.equal(r[1].type, 'failure');
+});
+
+test('pytest parameterisation outranks a loose substring', () => {
+  const junit = [
+    mk('test_rounds_badly', 'passed'),
+    mk('test_rounds[0.1-0.2]', 'failed', 'failure'),
+  ];
+  const r = matchCases(['test_rounds'], junit);
+  assert.equal(r[0].type, 'failure');
+});
+
+test('a mocha suite prefix still matches', () => {
+  const junit = [mk('calc > divides cleanly', 'failed', 'failure')];
+  const r = matchCases(['divides cleanly'], junit);
+  assert.equal(r[0].matched, true);
+  assert.equal(r[0].type, 'failure');
+});
+
+test('scoring ranks exact above decorated above substring', () => {
+  const name = 'test_parse';
+  const exact = scoreMatch(name, mk('test_parse', 'passed'));
+  const param = scoreMatch(name, mk('test_parse[a]', 'passed'));
+  const sub = scoreMatch(name, mk('test_parse_unicode_and_more', 'passed'));
+  const none = scoreMatch(name, mk('completely_different', 'passed'));
+  assert.ok(exact > param, 'exact beats parameterised');
+  assert.ok(param > sub, 'parameterised beats loose substring');
+  assert.ok(sub > none, 'loose substring beats nothing');
+  assert.equal(none, 0);
+});
+
+test('two names competing for ONE case: only one may have it', () => {
+  // Both added names contain `test_parse`, so both score against the single
+  // reported case. Without one-to-one assignment they BOTH claim it and both
+  // inherit its failure — manufacturing proof for a test that never ran.
+  //
+  // An earlier version of this test used names with distinct exact matches,
+  // so dropping the constraint changed nothing and the test passed against
+  // broken code. Caught by mutating the source, not by reading it.
+  const junit = [mk('test_parse', 'failed', 'failure')];
+  const r = matchCases(['test_parse_alpha', 'test_parse_beta'], junit);
+  const matched = r.filter((x) => x.matched);
+  assert.equal(matched.length, 1, 'exactly one name may claim the only reported case');
+  assert.equal(r.filter((x) => x.type === 'failure').length, 1,
+    'the failure must not be credited twice');
+});
+
+test('a name with no corresponding case is unmatched', () => {
+  const junit = [mk('test_a', 'passed')];
+  const r = matchCases(['test_a', 'completely_unrelated'], junit);
+  assert.equal(r[0].matched, true);
+  assert.equal(r[1].matched, false);
 });

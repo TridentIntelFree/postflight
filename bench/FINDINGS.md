@@ -137,3 +137,49 @@ the cause is the platform, not the test.
 - Loose name matching is bidirectional substring. It has not misfired in 53
   commits (0 unmatched, 0 observed mismatches), but a short test name that is
   a substring of another could in principle match the wrong case.
+
+---
+
+## 2026-10-13 — scored matching, and runner auto-detection (roadmap item 2)
+
+### Scored one-to-one matching
+
+Name matching was first-match-wins over a bidirectional substring test, which
+pairs `test_parse` with `test_parse_unicode` whenever the latter is listed
+first. Candidates are now scored (exact > parameterised > suite-prefixed >
+substring) and assigned one case to one name.
+
+**Verdict-neutral across all 53 benchmark commits.** This closed a latent
+failure mode rather than an observed one, and that is worth stating plainly:
+it is not an improvement anyone can measure, it is a trap removed.
+
+Worth recording: one test here did not test what it claimed. "two overlapping
+names do not claim the same reported case" used names with distinct exact
+matches, so removing the one-to-one constraint changed nothing and the test
+passed against broken code. Found by mutating the source. The fix is to make
+both names compete for a *single* reported case — the only shape that
+exercises the constraint.
+
+### Runner auto-detection
+
+`test-command` is now optional. The runner is detected from `package.json`
+(declared test script first, dependencies second), `pyproject.toml`,
+`pytest.ini`, `setup.cfg`, `go.mod`, `Cargo.toml`, `build.gradle`, `pom.xml`
+and `Gemfile`, and told to emit JUnit XML where it has a built-in reporter.
+
+**Measured with no `test-command` configured at all:**
+
+| | verdicts differing from hand-configured |
+|---|---|
+| express (mocha), 24 commits | **0** |
+| click (pytest), 29 commits | **0** |
+
+Detection returns null rather than guessing when nothing is recognised.
+Guessing wrong is how the tool previously produced a confident verdict about a
+command that never ran.
+
+Runners with no built-in JUnit reporter — jest (needs the separate jest-junit
+package), go, cargo, node:test, rspec — are declared `junit: false` rather than
+left absent, and postflight says so in the log. Those fall back to output
+heuristics, which is the fragile path and should be treated as the next thing
+to fix.
