@@ -105,8 +105,8 @@ in the log which applies:
 | | Runners |
 |---|---|
 | **JUnit XML** — read directly, nothing inferred | vitest, mocha, node:test\*, pytest, gradle, maven |
-| **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`) |
-| **Reading output** — the fragile path | cargo, rspec |
+| **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`), rspec (`--format json`) |
+| **Reading output** — the fragile path | cargo |
 
 Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is

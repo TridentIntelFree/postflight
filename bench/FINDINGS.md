@@ -547,3 +547,94 @@ works.** The project's whole thesis, found twice in its own CI — once in a
 test that didn't test what it claimed (PR #4), once in a mutation that didn't
 mutate. Verify the harness, not just the result. Run the CI block locally
 before pushing.
+
+---
+
+## 2026-10-13 — rspec via its own JSON formatter
+
+Driven by the previous entry's lesson: **for every runner, test the
+import-failure path specifically.** cargo and rspec were the two left guessing
+from prose. rspec first, because its JSON formatter is built in and stable —
+no extra gem, unlike `rspec_junit_formatter`.
+
+Everything below was captured by installing rspec and running it against real
+Ruby code. Three fixtures committed.
+
+### What rspec's JSON gives, for free
+
+```
+errors_outside_of_examples_count   a spec file could not be loaded
+examples[].status                  passed / failed / pending
+examples[].exception.class         WHY it failed — the whole judgement
+```
+
+**rspec aborts the entire run on any load error.** `example_count` is 0 even
+for spec files that were perfectly loadable — unlike jest, which runs the
+healthy suites anyway. That makes rspec the one runner so far that *cannot*
+produce the mixed report that caught both jest and node:test, because a real
+result never sits beside a load error.
+
+### The judgement that matters, and it is not the load error
+
+rspec reports a Ruby exception raised **inside** an example as
+`status: "failed"`, identical to a failed expectation. So "failed" alone
+cannot be read as proof — this runner's version of the node:test bug.
+
+`exception.class` settles it, and the list has to be named rather than a
+catch-all, because both directions are costly:
+
+| Exception | Verdict | Why |
+|---|---|---|
+| `RSpec::Expectations::ExpectationNotMetError` | failure | ran and disagreed |
+| `ZeroDivisionError`, `TypeError`, `RuntimeError` | failure | code exists and misbehaved — a real observation |
+| `NoMethodError`, `NameError`, `LoadError` | error | the name is not there |
+
+**`NoMethodError` sits on both sides of that line**, and the message says
+which. Verified, not assumed:
+
+```
+undefined method `modulo' for module Calc   the method is not there
+undefined method `fetch' for nil            the code RAN and hit a nil
+```
+
+The second is the classic Ruby bug a fix like this captures. Reading it as
+"could not run" would discard a true finding, so a nil receiver stays a
+failure. A blanket "any Ruby exception is a load error" rule would have been
+wrong on exactly the commits worth catching.
+
+### End to end, zero configuration
+
+A real rspec repo, no `test-command`, three separate runs:
+
+| Pull request | Verdict |
+|---|---|
+| real fix + test using existing methods | `✅ Proven`, narrowed to the 1 added case |
+| test calling a method the PR adds | `➖ Nothing to prove yet (references-new-code)` |
+| spec file that will not load | `⚠️ inconclusive (load-error)` |
+
+Four mutations caught, two added to CI: treating every rspec failure as
+missing code, and the reverse. Both are one-line changes that would silently
+invert the verdict on real Ruby pull requests.
+
+### Two bugs in yesterday's work, found only by running this
+
+`diagnose.js` returned `unknown` for a plainly new Ruby method. Two gaps,
+neither visible from the unit tests:
+
+- `missingNames()` had no pattern for Ruby's `undefined method` wording — it
+  only knew `uninitialized constant`.
+- `introducedByPullRequest()` matched `def modulo` but not `def self.modulo`,
+  which is how Ruby declares the module method an example reaches for.
+
+So **`references-new-code` has now fired on a real project**, not only the
+purpose-built JS repo. That closes one of the three "could not verify" items
+from PR #8 — and it closed by finding two defects, which is the usual way.
+
+### Still on heuristics
+
+cargo alone. On stable Rust, `cargo test -- --format json` needs
+`-Z unstable-options`, so libtest results are prose; `--message-format json`
+does give structured **build** diagnostics, which is the compile-failure case
+— i.e. exactly the dangerous one. Worth doing next on that basis alone, and
+worth being honest that it will be a partial conversion rather than a clean
+one like this.

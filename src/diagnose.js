@@ -72,6 +72,10 @@ export function missingNames(message = '') {
     /cannot find symbol[\s\S]{0,80}?symbol:\s+\w+ (\w+)/g, // Java
     /Unresolved reference: (\w+)/g,                     // Kotlin
     /uninitialized constant (\w+)/g,                    // Ruby
+    // Ruby's wording for a method that is not there. Found by running
+    // postflight against a real rspec project, where the diagnosis came back
+    // "unknown" for a plainly new method.
+    /undefined method [`'"]?([A-Za-z_]\w*[?!=]?)['"`]? for/g,
   ];
   for (const re of patterns) {
     for (const m of String(message).matchAll(re)) names.add(m[1]);
@@ -95,7 +99,11 @@ function introducedByPullRequest(name, { addedSourceLines = [], changedFiles = [
   })) return true;
 
   const declares = new RegExp(
-    `\\b(?:export\\s+)?(?:function|const|let|var|class|def|type|interface|fn|func|struct)\\s+${escape(leaf)}\\b`
+    // `def self.modulo` and `def Calc.modulo` are how Ruby declares the
+    // module method an rspec example reaches for, so the receiver has to be
+    // allowed between the keyword and the name.
+    `\\b(?:export\\s+)?(?:function|const|let|var|class|def|type|interface|fn|func|struct)\\s+`
+    + `(?:[A-Za-z_]\\w*\\.)?${escape(leaf)}\\b`
     + `|\\bexport\\s*\\{[^}]*\\b${escape(leaf)}\\b`
     + `|\\b${escape(leaf)}\\s*[:=]\\s*(?:function|\\(|async)`
   );

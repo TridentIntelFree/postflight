@@ -15,6 +15,7 @@
 import { readFile, access } from 'node:fs/promises';
 import { parseGoJson } from './gotest.js';
 import { parseJestJson } from './jestjson.js';
+import { parseRspecJson } from './rspec.js';
 import { join } from 'node:path';
 
 const REPORT = 'postflight-report.xml';
@@ -103,8 +104,15 @@ const RUNNERS = {
     filter: (names) => `-Dtest=${quote(names.join(','))}`,
   },
   rspec: {
-    command: 'bundle exec rspec {files}',
+    // No JUnit without the separate rspec_junit_formatter gem, which cannot
+    // be assumed present — but rspec's own JSON formatter is built in and
+    // names the run/never-ran distinction outright
+    // (`errors_outside_of_examples_count`). Written to a file so rspec's
+    // progress output can still go to the terminal.
+    command: `bundle exec rspec {files} --format json --out ${JSON_REPORT} --format progress`,
     junit: false,
+    reportFile: JSON_REPORT,
+    parse: parseRspecJson,
     filter: (names) => names.map((n) => `-e ${quote(n)}`).join(' '),
   },
 };

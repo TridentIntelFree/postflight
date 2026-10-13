@@ -14,6 +14,7 @@ test('extracts the missing name from each ecosystem', () => {
     ["SyntaxError: The requested module './calc.js' does not provide an export named 'modulo'", 'modulo'],
     ['./main.go:5:3: undefined: helperFunc', 'helperFunc'],
     ['NameError: uninitialized constant Widget', 'Widget'],
+    ["NoMethodError: undefined method `modulo' for module Calc", 'modulo'],
   ];
   for (const [message, expected] of cases) {
     assert.ok(missingNames(message).includes(expected),
@@ -32,6 +33,19 @@ test('a test importing code the PR adds is benign, not a problem', () => {
   assert.equal(d.kind, 'references-new-code');
   assert.match(d.explanation, /expected for new work/);
   assert.match(d.explanation, /nothing needs fixing/);
+});
+
+test('a Ruby module method the PR adds is recognised as new code', () => {
+  // Found by running postflight against a real rspec project: the diagnosis
+  // came back "unknown" for a plainly new method, because `def self.modulo`
+  // puts a receiver between the keyword and the name.
+  const d = diagnoseLoadError({
+    message: "NoMethodError: undefined method `modulo' for module Calc",
+    addedSourceLines: ['  def self.modulo(a, b)', '    ((a % b) + b) % b'],
+    changedFiles: ['lib/calc.rb', 'spec/calc_spec.rb'],
+  });
+  assert.equal(d.kind, 'references-new-code');
+  assert.deepEqual(d.names, ['modulo']);
 });
 
 test('a new source FILE also counts as introduced by the PR', () => {

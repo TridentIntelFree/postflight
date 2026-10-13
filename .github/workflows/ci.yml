@@ -89,6 +89,17 @@ jobs:
           sed -i 's|  return dependencyDiff.some((l) => re.test(l));|  return true;|' src/diagnose.js
           expect_failure "drift blamed without evidence" src/diagnose.js
 
+          # 6. rspec reports a missing method and a failed expectation with
+          #    the SAME status. Reading the first as proof is this runner's
+          #    version of the node:test bug.
+          sed -i 's|function isMissingCode(exception) {|function isMissingCode(exception) { return false;|' src/rspec.js
+          expect_failure "rspec missing code read as a real failure" src/rspec.js
+
+          # 7. the other direction: a nil crash IS the old behaviour, and
+          #    calling it "could not run" throws away a true finding.
+          perl -0pi -e "s/\n  if \(\/\\\\bfor \(\?:nil.*?\n/\n/s" src/rspec.js
+          expect_failure "rspec nil crash misread as missing code" src/rspec.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored
