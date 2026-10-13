@@ -122,3 +122,32 @@ test('classify: an unrecognised failure is not reported as proof', () => {
   assert.equal(v.outcome, OUTCOME.INCONCLUSIVE);
   assert.equal(v.reason, 'unrecognised');
 });
+
+// --- the command never ran --------------------------------------------------
+//
+// The first wall every non-Node project hits: the base worktree is a fresh
+// checkout and has no virtualenv, so the command is not found. Reporting that
+// as "inconclusive" hides a setup problem behind a verdict.
+
+test('classify: a missing command is a setup error, not a verdict', () => {
+  const v = classify({ exitCode: 127, output: '/bin/sh: 1: .venv/bin/python: not found' });
+  assert.equal(v.outcome, OUTCOME.ERROR);
+  assert.equal(v.reason, 'command-unavailable');
+  assert.match(v.evidence, /link-paths/);
+});
+
+test('classify: a test that merely prints "not found" is still a real verdict', () => {
+  // The narrowness matters: a test asserting on a 404 message must not be
+  // mistaken for a broken setup.
+  const v = classify({
+    exitCode: 1,
+    output: [
+      'FAILED tests/test_api.py::test_missing',
+      'AssertionError: expected "not found" in response body',
+      'assert "not found" == "gone"',
+      '1 failed, 42 passed',
+    ].join('\n'),
+  });
+  assert.equal(v.outcome, OUTCOME.RED);
+  assert.equal(v.reason, 'assertion');
+});

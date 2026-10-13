@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { globToRegExp, selectTestFiles, DEFAULT_PATTERNS } from '../src/detect.js';
+import {
+  globToRegExp, selectTestFiles, DEFAULT_PATTERNS,
+  countAddedTestCases, isTestDeclaration,
+} from '../src/detect.js';
 
-// A bug in here does not announce itself: redgreen reports "no test files
+// A bug in here does not announce itself: postflight reports "no test files
 // touched", the check goes green, and it looks like it is working. That silent
 // no-op is the worst failure this tool can have, so the matcher is pinned down
 // harder than its size suggests.
@@ -84,4 +87,66 @@ test('a custom pattern replaces the defaults rather than adding to them', () => 
   const changed = ['src/a.test.js', 'weird/thing.checks.js'];
   const found = selectTestFiles(changed, ['**/*.checks.js']);
   assert.deepEqual(found, ['weird/thing.checks.js']);
+});
+
+// --- net new test cases -----------------------------------------------------
+//
+// This gate is what stops the check accusing innocent pull requests. Measured
+// against 24 real commits of an established project it turned nine false
+// alarms into silence, so it is pinned down accordingly.
+
+test('recognises a test declaration in each ecosystem', () => {
+  const decls = [
+    "  it('does a thing', () => {",
+    '  test("does a thing", async () => {',
+    '    describe("a group", function () {',
+    '    def test_divides(self):',
+    '    func TestDivide(t *testing.T) {',
+    '    @Test',
+    '    #[test]',
+    '    [Fact]',
+  ];
+  for (const d of decls) assert.ok(isTestDeclaration(d), `should recognise: ${d.trim()}`);
+});
+
+test('does not mistake ordinary code for a test declaration', () => {
+  const notTests = [
+    '  const result = divide(6, 2);',
+    '  // it is important to handle zero',
+    '  return items.filter(x => x.test);',
+    '  await submit(form);',
+  ];
+  for (const line of notTests) {
+    assert.ok(!isTestDeclaration(line), `should NOT match: ${line.trim()}`);
+  }
+});
+
+test('a genuinely added test counts', () => {
+  const added = ["  it('rejects divide by zero', () => {", '    assert.throws(fn);'];
+  assert.equal(countAddedTestCases(added, []), 1);
+});
+
+test('a RENAMED test counts as nothing new', () => {
+  // The case that mattered: renaming a test title adds one declaration and
+  // removes one. Counting only additions fires "not proven" at someone who
+  // fixed a typo.
+  const added = ["  it('should pass-through middleware', function (done) {"];
+  const removed = ["  it('should pass-though middleware', function (done) {"];
+  assert.equal(countAddedTestCases(added, removed), 0);
+});
+
+test('a deleted test counts as nothing new', () => {
+  const removed = ["  it('no longer relevant', () => {"];
+  assert.equal(countAddedTestCases([], removed), 0);
+});
+
+test('adding two while removing one counts as one', () => {
+  const added = ["it('a', () => {", "it('b', () => {"];
+  const removed = ["it('old', () => {"];
+  assert.equal(countAddedTestCases(added, removed), 1);
+});
+
+test('never returns a negative count', () => {
+  const removed = ["it('a', () => {", "it('b', () => {"];
+  assert.equal(countAddedTestCases([], removed), 0);
 });

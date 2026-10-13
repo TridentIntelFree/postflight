@@ -33,6 +33,27 @@ export async function changedFiles(baseSha, headSha, cwd = process.cwd()) {
 }
 
 /**
+ * The lines a pull request adds and removes in the given files, with the
+ * leading marker stripped. Both sides are needed: a renamed test appears as
+ * one removal and one addition, and only comparing the two tells it apart
+ * from a genuinely new test.
+ */
+export async function changedLines(baseSha, headSha, files, cwd = process.cwd()) {
+  if (!files.length) return { added: [], removed: [] };
+  const out = await git(
+    ['diff', '--unified=0', `${baseSha}...${headSha}`, '--', ...files],
+    cwd
+  );
+  const added = [];
+  const removed = [];
+  for (const line of out.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
+    else if (line.startsWith('-') && !line.startsWith('---')) removed.push(line.slice(1));
+  }
+  return { added, removed };
+}
+
+/**
  * Confirm both commits are present. Shallow clones are the default for
  * actions/checkout, and the resulting error ("bad object") is opaque enough
  * that it is worth catching here and saying what to change.
@@ -43,7 +64,7 @@ export async function assertHistory(baseSha, headSha, cwd = process.cwd()) {
       await git(['cat-file', '-e', `${sha}^{commit}`], cwd);
     } catch {
       throw new Error(
-        `Commit ${sha.slice(0, 8)} is not in this clone. redgreen needs both ` +
+        `Commit ${sha.slice(0, 8)} is not in this clone. postflight needs both ` +
         `sides of the comparison, so the checkout step needs enough history:\n\n` +
         `    - uses: actions/checkout@v4\n` +
         `      with:\n` +
@@ -66,7 +87,7 @@ export async function buildBaseWorktree({
   linkPaths = [],
   cwd = process.cwd(),
 }) {
-  const dir = await mkdtemp(join(tmpdir(), 'redgreen-'));
+  const dir = await mkdtemp(join(tmpdir(), 'postflight-'));
   const worktree = join(dir, 'base');
 
   await git(['worktree', 'add', '--detach', worktree, baseSha], cwd);

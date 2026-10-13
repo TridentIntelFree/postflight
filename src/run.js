@@ -23,7 +23,7 @@ export function runTests({ command, files, cwd, env = {}, echo = true }) {
     const child = spawn(resolved, {
       cwd,
       shell: true,
-      env: { ...process.env, ...env, REDGREEN: '1' },
+      env: { ...process.env, ...env, POSTFLIGHT: '1' },
     });
 
     let output = '';
@@ -42,7 +42,7 @@ export function runTests({ command, files, cwd, env = {}, echo = true }) {
     child.stderr.on('data', collect);
 
     child.on('error', (err) => {
-      resolve({ exitCode: 127, output: `${output}\nredgreen: ${err.message}`, truncated, command: resolved });
+      resolve({ exitCode: 127, output: `${output}\npostflight: ${err.message}`, truncated, command: resolved });
     });
     child.on('close', (code) => {
       resolve({ exitCode: code ?? 1, output, truncated, command: resolved });
