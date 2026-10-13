@@ -277,3 +277,54 @@ the heuristics tier is a warning — the previous message claimed jest was being
 read from output even after it was being parsed, which was simply wrong.
 
 No regressions: express and click unchanged, 0 verdict differences.
+
+---
+
+## 2026-10-13 — narrowing the run to the added cases (roadmap item 1, second half)
+
+The `filter` functions had been declared for every runner since detection
+landed and were **never called**. Dead code in a tool people put in CI is a
+defect; the choice was to wire them or delete them.
+
+Wired, with a mandatory fallback: if the filter matches none of the added
+cases, the whole file is run instead. Name patterns differ per runner and per
+project, and a silent miss would turn a real verdict into "inconclusive" with
+nobody the wiser. The fallback is not optional and not configurable.
+
+### Measured, narrowed vs whole-file, 53 commits
+
+| | time | verdict differences |
+|---|---|---|
+| click (pytest) | 29.9s -> 17.1s (**43% faster**) | **0** |
+| express (mocha) | 19.2s -> 19.6s (**2% slower**) | **0** |
+
+**The express result is not a win and is reported as one of nothing.** Its
+test files are small enough that running the whole file costs little, and
+three commits fall back, paying for two runs. At that size the difference is
+noise.
+
+So narrowing helps where a suite is large relative to the tests a pull request
+adds, and costs nothing measurable where it is not. Default on, because the
+upside scales with suite size and the downside does not.
+
+### The fallback fires, and it fires for a reason
+
+On the first measurement click fell back 3 times, all on `load-error`
+commits: the suite cannot load, so no added case appears in the report, so
+`coversAny` is false. Running the whole file then establishes the same thing
+more slowly.
+
+Skipping the fallback when the narrowed run *already* reported a load error
+took click from 39% to 43% faster and its fallbacks from 3 to 0.
+
+Express still falls back 3 times, and that is left alone deliberately: mocha
+writes **no report at all** when a file will not load, which is
+indistinguishable from a filter that matched nothing. Guessing between them
+to save 2% would trade the safety net for noise.
+
+### Note
+
+`coversAny` and `hasLoadError` started life inside main.js, where nothing
+could import them and so nothing could test them. Moved to `cases.js`.
+Mutating them both — accepting every filter miss, and confusing a failure
+with an error — turns the suite red.

@@ -9,7 +9,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
-import { extractTestNames } from './cases.js';
+import { extractTestNames, coversAny, hasLoadError } from './cases.js';
+import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
@@ -150,18 +151,54 @@ async function main() {
     }
 
     const junitPaths = listInput('junit-paths', ['.']);
-    const startedAt = Date.now();
-    log.info(`Running the touched tests against base ${baseSha.slice(0, 8)}…`);
-    const run = await runTests({
-      command: testCommand,
-      files: built.overlaid,
-      cwd: built.worktree,
-    });
 
-    // A runner that emits its own structured stream is read directly; one
-    // that writes JUnit has its report collected. Either way the result
-    // arrives in the same shape and nothing downstream cares which.
-    const report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+    // Run only the cases this pull request adds, where the runner can be told
+    // to. Running the whole file is usually far more work than the question
+    // needs, and on a large suite that is the difference between a check
+    // people keep and one they turn off.
+    const narrowing = boolInput('narrow', true) && runner?.filter && addedNames.length > 0
+      ? `${testCommand} ${runner.filter(addedNames)}`
+      : null;
+
+    let startedAt = Date.now();
+    let run = null;
+    let report = null;
+
+    if (narrowing) {
+      log.info(`Running this pull request's ${addedNames.length} added ` +
+        `${addedNames.length === 1 ? 'case' : 'cases'} against base ${baseSha.slice(0, 8)}…`);
+      run = await runTests({ command: narrowing, files: built.overlaid, cwd: built.worktree });
+      report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+    }
+
+    // A filter that matched nothing must never stand in for a verdict. Name
+    // patterns differ per runner and per project, and a silent miss would
+    // turn a real result into "inconclusive" with nobody the wiser.
+    // Falling back costs a second full run, so only do it when the wider run
+    // could actually say something different. A narrowed run that already
+    // reported a load error has established the suite does not load, and
+    // running the whole file will establish it again more slowly.
+    const narrowFailedToLoad = narrowing && hasLoadError(toCases(report));
+    if (narrowFailedToLoad) {
+      log.info('The narrowed run could not load the suite; the whole file would not either.');
+    }
+
+    if (!narrowing || (!coversAny(toCases(report), addedNames) && !narrowFailedToLoad)) {
+      if (narrowing) {
+        log.warn('The narrowed run matched none of the added cases; running the whole file.');
+      }
+      startedAt = Date.now();
+      log.info(`Running the touched tests against base ${baseSha.slice(0, 8)}…`);
+      run = await runTests({
+        command: testCommand,
+        files: built.overlaid,
+        cwd: built.worktree,
+      });
+      // A runner that emits its own structured stream is read directly; one
+      // that writes JUnit has its report collected. Either way the result
+      // arrives in the same shape and nothing downstream cares which.
+      report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+    }
 
     let verdict = classify(run, report, addedNames);
 
@@ -175,7 +212,7 @@ async function main() {
       for (let i = 1; i <= confirmations; i++) {
         log.info(`Confirming the failure is not flaky (${i}/${confirmations})…`);
         const again = await runTests({
-          command: testCommand,
+          command: narrowing || testCommand,
           files: built.overlaid,
           cwd: built.worktree,
           echo: false,

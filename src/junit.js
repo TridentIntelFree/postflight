@@ -102,3 +102,15 @@ export function summarise(cases) {
     hasLoadError: errors.length > 0,
   };
 }
+
+/**
+ * Accept either JUnit XML or already-parsed cases and return cases.
+ *
+ * Runners arrive here through different routes — an XML report, their own
+ * structured stream — and everything downstream should be able to ignore
+ * which.
+ */
+export function toCases(report) {
+  if (!report) return [];
+  return Array.isArray(report) ? report : parseJUnit(report);
+}
