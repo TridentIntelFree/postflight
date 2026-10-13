@@ -5,6 +5,8 @@
 //   3. run them
 //   4. say what that proved, and how strongly
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
 import { extractTestNames } from './cases.js';
@@ -34,10 +36,18 @@ async function main() {
     }
     testCommand = runner.command;
     log.info(`Detected ${runner.name}; running: ${testCommand}`);
-    if (!runner.junit) {
-      log.info(
-        `${runner.name} has no built-in JUnit report, so results are read from its ` +
-        'output. Set test-command yourself if you can make it write one.'
+    // Three tiers, and saying which one applies is the point: a JUnit report,
+    // the runner's own structured format, or reading its prose. Only the
+    // third is guesswork, and only the third deserves a warning.
+    if (runner.junit) {
+      log.info(`Results will be read from ${runner.junit}.`);
+    } else if (runner.parse) {
+      log.info(`Results will be read from ${runner.name}'s own structured output.`);
+    } else {
+      log.warn(
+        `${runner.name} produces no structured report, so results are inferred from ` +
+        'its output. That is the least reliable path — set test-command yourself ' +
+        'if you can make it emit JUnit XML.'
       );
     }
   }
@@ -151,9 +161,7 @@ async function main() {
     // A runner that emits its own structured stream is read directly; one
     // that writes JUnit has its report collected. Either way the result
     // arrives in the same shape and nothing downstream cares which.
-    const report = runner?.parse
-      ? (runner.parse(run.output) ?? await collectJUnit(junitPaths, built.worktree, startedAt))
-      : await collectJUnit(junitPaths, built.worktree, startedAt);
+    const report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
 
     let verdict = classify(run, report, addedNames);
 
@@ -172,9 +180,7 @@ async function main() {
           cwd: built.worktree,
           echo: false,
         });
-        const againReport = runner?.parse
-          ? (runner.parse(again.output) ?? await collectJUnit(junitPaths, built.worktree, startedAt))
-          : await collectJUnit(junitPaths, built.worktree, startedAt);
+        const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
         const repeat = classify(again, againReport, addedNames);
         if (repeat.outcome !== OUTCOME.RED) {
           log.warn('The base failure did not reproduce — treating it as flaky.');
@@ -201,6 +207,29 @@ async function main() {
   } finally {
     await built.cleanup();
   }
+}
+
+/**
+ * Collect whatever structured result the runner produced.
+ *
+ * Some runners stream it to stdout (go), some write it to a file (jest), and
+ * some emit JUnit XML. All three arrive here as the same thing, and anything
+ * unreadable falls back to a JUnit search rather than failing outright.
+ */
+async function readReport(runner, run, cwd, junitPaths, since) {
+  if (runner?.parse) {
+    let raw = run.output;
+    if (runner.reportFile) {
+      try {
+        raw = await readFile(join(cwd, runner.reportFile), 'utf8');
+      } catch {
+        raw = run.output;   // the runner never wrote it; try its stdout
+      }
+    }
+    const parsed = runner.parse(raw);
+    if (parsed && parsed.length) return parsed;
+  }
+  return collectJUnit(junitPaths, cwd, since);
 }
 
 function policyFor(outcome) {
