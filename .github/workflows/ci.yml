@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+
+  # Mutation check: the suite must actually fail when the classifier is wrong.
+  #
+  # This is the project's own thesis applied to itself. Every assertion in
+  # test/classify.test.js passes today; that alone proves nothing, so each
+  # mutation below breaks one real behaviour and the run fails if the suite
+  # does not notice. Mutation 1 is the exact trap documented in
+  # charlieanna/autocode#299 — treating a load error as proof.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: A broken classifier must turn the suite red
+        run: |
+          set -euo pipefail
+          cp src/classify.js /tmp/classify.orig
+
+          expect_failure() {
+            local label="$1"
+            if npm test >/tmp/out 2>&1; then
+              echo "::error::Mutation survived: $label"
+              echo "The test suite passed against deliberately broken code, so it"
+              echo "is not testing what it claims to test."
+              cp /tmp/classify.orig src/classify.js
+              exit 1
+            fi
+            echo "  caught: $label"
+            cp /tmp/classify.orig src/classify.js
+          }
+
+          # 1. load errors treated as strong proof
+          sed -i "s|OUTCOME.INCONCLUSIVE, 'load-error'|OUTCOME.RED, 'load-error'|g" src/classify.js
+          expect_failure "load-error reported as proof"
+
+          # 2. the empty-collection guard removed
+          perl -0pi -e "s/if \(\/no tests ran.*?\n    \}\n//s" src/classify.js
+          expect_failure "exit-0-with-no-tests reported as a pass"
+
+          # 3. JUnit evidence ignored in favour of output heuristics
+          sed -i "s|  if (junitXml) {|  if (false) {|" src/classify.js
+          expect_failure "JUnit evidence ignored"
+
+          echo "All mutations caught."
+
+      - name: Working tree restored
+        run: git diff --exit-code
