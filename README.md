@@ -112,13 +112,14 @@ Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is
 the one failure this tool must not have.
 
-\* node:test emits JUnit XML but does not use `<error>` at all: a file that
-could not be imported arrives as a `<failure>` named after the file, in the
-same shape as a real assertion failure. Taken at face value that reads as
-proof, so postflight corrects it, matching on two marks together — the case
-is named after a file *and* carries `cause: 'test failed'` with no assertion
-detail. Pinned by a real captured report in
-[`test/fixtures/`](test/fixtures/nodetest-import-failure.xml).
+\* node:test emits JUnit XML but does not use `<error>` at all. Any failure it
+cannot pin on a named test — an unimportable file, a top-level assertion, an
+async throw after a test returned — arrives as a `<failure>` named after the
+*file*, carrying `cause: 'test failed'`. All three are byte-identical in the
+report, so postflight reads them all as "could not run": right for the first,
+and deliberately conservative for the others, since that bias costs a true
+finding at worst while the opposite hands out false credit. Pinned by two real
+captured reports in [`test/fixtures/`](test/fixtures/).
 
 ## Measured on real history
 

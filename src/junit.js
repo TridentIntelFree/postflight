@@ -53,11 +53,12 @@ export function parseJUnit(xml) {
 }
 
 /**
- * A `<failure>` that is really a file that never ran.
+ * A `<failure>` that is not attributable to any test that ran.
  *
- * node:test's JUnit reporter does not use `<error>` at all. A test file that
- * could not even be imported comes out as a `<failure type="testCodeFailure">`
- * named after the file, in exactly the shape of a real assertion failure:
+ * node:test's JUnit reporter does not use `<error>` at all. When something
+ * goes wrong in a file that cannot be pinned on a named test, it emits a
+ * `<failure type="testCodeFailure">` named after the *file*, in exactly the
+ * shape of a real assertion failure:
  *
  *   <testcase name="test/a.test.js" classname="test" failure="test failed">
  *     <failure type="testCodeFailure" message="test failed">
@@ -66,18 +67,32 @@ export function parseJUnit(xml) {
  *
  * Taken at face value that reads as "the test ran against base and
  * disagreed", which is the one conclusion this tool must never reach by
- * accident — a file that will not import proves nothing whatsoever. Found by
- * running postflight end to end against a commit adding a new export, where
- * it reported "Proven" for a test that had never executed.
+ * accident. Found by running postflight end to end against a commit adding a
+ * new export: it reported "Proven" for a test that had never executed.
  *
- * Two marks together, because either alone could misfire:
+ * `cause: 'test failed'` is **broader than an import failure**, and the
+ * comment here used to claim otherwise. Probing node:test directly, the same
+ * entry appears for at least three different things:
  *
- *   the name is a path to a file   a real case name is not a path
- *   the cause is the bare string   a genuine assertion carries the
- *     'test failed'                  AssertionError as its cause
+ *   an unimportable file      nothing ran — must not count as proof
+ *   a top-level assertion     outside any test(); it did run and disagree
+ *   an async throw after a    whose own named test is reported as PASSED
+ *     test returned
  *
- * When in doubt this errs toward "could not run", which costs a true finding
- * at worst; the opposite error hands out false credit.
+ * All three are byte-identical in the report, so they cannot be told apart
+ * and all three are read as "could not run". That is right for the first and
+ * conservative for the others: the bias costs a true finding at worst, while
+ * the opposite error hands out false credit. In practice the second and third
+ * cannot reach a verdict anyway — neither contributes a name that
+ * `countAddedTestCases` would count, and the async case's own test keeps its
+ * reported status, which the fixture pins.
+ *
+ * The filename check is belt-and-braces rather than an independent guard: no
+ * node:test output has been observed where `cause: 'test failed'` appears on
+ * a case *not* named after a file. It is kept because it is free and because
+ * it bounds the correction to the shape actually seen, but a mutation that
+ * widens it is not caught by any real captured output, and pretending
+ * otherwise would be the kind of invented fixture this project avoids.
  */
 function neverRan(name, message) {
   const looksLikeAFile = /[/\\]/.test(name) && /\.[cm]?[jt]sx?$/.test(name);
