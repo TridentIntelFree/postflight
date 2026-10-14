@@ -124,6 +124,29 @@ jobs:
           sed -i 's|  if (addedSourceLines.some((l) => declares.test(l))) return true;|  if (addedSourceLines.some((l) => declares.test(l))) return true; return false;|' src/diagnose.js
           expect_failure "C-family declaration not recognised" src/diagnose.js
 
+          # 12. shell metacharacters emitted unquoted. Five of the ten
+          #     runner filters contain `| ( ) ^ $`, and unquoted they make the
+          #     command a pipeline whose exit status is 127 — so postflight
+          #     reported `error (command-unavailable)` on ordinary pull
+          #     requests. Live for four releases, because every test name in
+          #     every lab happened to contain a space.
+          sed -i 's|function quote(value) {|function quote(value) { return value;|' src/runners.js
+          expect_failure "filter arguments not shell-quoted" src/runners.js
+
+          # 13. confirming a verdict by re-running a DIFFERENT command. After
+          #     a narrowing fallback that compares two different things and
+          #     calls the difference "not reproducible", which destroyed 4
+          #     true findings in 30 cobra commits.
+          sed -i "s|const repeat = await rerun(command);|const repeat = await rerun('other');|" src/confirm.js
+          expect_failure "confirmation re-runs a different command" src/confirm.js
+
+          # 14. the characterization marker silencing more than its own
+          #     test. A marker that suppresses the check invisibly is a hole
+          #     in the check, and this is the direction that matters: too
+          #     eager, not too shy.
+          sed -i 's|      if (distance < -3 .. distance > 3) continue;||' src/cases.js
+          expect_failure "characterization marker leaks to distant tests" src/cases.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored

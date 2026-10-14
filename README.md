@@ -17,9 +17,14 @@ aren't testing what you changed.
 That is the whole configuration. The runner is detected from your
 repository — `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`,
 `build.gradle`, `pom.xml`, `Gemfile` — and told to write a JUnit report where
-it can, because reading a report beats guessing at output. Measured across 53
-commits of two projects in two languages, detection produced **identical
-verdicts to a hand-written command**.
+it can, because reading a report beats guessing at output. Measured across 89
+commits of express, click and cobra — mocha, pytest and go — detection
+produced **identical verdicts to a hand-written command**.
+
+The exception is a multi-module project: gson's benchmark passes
+`mvn -B -pl gson test` by hand, because detection yields `mvn -B test` at the
+root and tests every module for a change confined to one. Monorepo scoping is
+not solved yet, so set `test-command` there.
 
 Set `test-command` yourself when you need to; it always wins. If nothing is
 recognised, postflight says so and asks, rather than guessing at a command and
@@ -63,7 +68,7 @@ requests** — telling authors their tests had teeth when they did not.
 | ❌ **Not proven** | Every touched test also passes on base. Whatever they check, it isn't what this PR changed. |
 | ⚠️ **Inconclusive** | The tests couldn't run on base at all. Nothing proven either way — but postflight says *why*, and one of the reasons isn't a problem. |
 | 🎲 **Not reproducible** | The same test gave two different answers on the same base commit. See [tests that sample](#tests-that-sample-quantum-monte-carlo-property-based). |
-| ➖ **Not applicable** | No test files touched. |
+| ➖ **Not applicable** | No test files touched, or every added case is marked [characterization](#when-a-test-is-deliberately-covering-what-already-works). |
 
 ### "Couldn't run" is four different things
 
@@ -112,6 +117,36 @@ in the log which applies:
 Only the third guesses, and when it recognises nothing it reports
 *inconclusive* rather than picking a side. Claiming proof it doesn't have is
 the one failure this tool must not have.
+
+### When a test is deliberately covering what already works
+
+A test written for behaviour that already worked is **indistinguishable** from
+an untested fix. No analysis can separate them — and this is not a rare case.
+Of the four pull requests postflight accused across cobra's recent history,
+two were explicitly "add tests for existing functions" commits. The verdict
+was accurate both times, and blocking either would have been wrong.
+
+You know which it is, so say so:
+
+```js
+// postflight: characterization
+test('divides negatives the way it always has', () => { … })
+```
+
+That case is excluded from the verdict. `characterisation`, `ignore` and
+`skip` all work, with `//`, `#`, `--` or `/* */`.
+
+Two rules keep it honest:
+
+- **It is read from the lines your pull request adds**, so the marker has to
+  be part of the change. An existing marker elsewhere in the file cannot
+  silence a new test.
+- **Marked cases are always listed in the report.** A marker that suppresses
+  the check invisibly is a hole in the check, and a reviewer cannot notice
+  what they are not shown.
+
+If every case you add is marked, postflight reports ✓ *Characterization
+tests* and stops — plainly, rather than as a pass it did not earn.
 
 ### Tests that sample: quantum, Monte Carlo, property-based
 
@@ -190,36 +225,61 @@ captured reports in [`test/fixtures/`](test/fixtures/).
 
 ## Measured on real history
 
-Run against 24 consecutive commits of [express](https://github.com/expressjs/express)
-that changed both source and tests:
+Four projects, four runners, 114 commits of real history. The rates differ by
+an order of magnitude and **that is the projects, not a bug** — click's recent
+history is largely deprecations and typing changes where tests legitimately
+pass on base; gson is a library whose fixes come with tests that capture them.
 
-| Verdict | | |
-|---|---:|---|
-| ➖ Not applicable | 46% | Renames, deletions, dependency swaps, refactors — nothing asserted, so nothing to disprove |
-| ✅ Proven | 38% | A test failed an assertion on base |
-| ⚠️ Inconclusive | 12% | Mostly merge commits and dependency drift |
-| ⚠️ Not proven | 4% | One commit |
+| | proven | not proven | couldn't run | n/a |
+|---|---|---|---|---|
+| gson (java, 25) | **56%** | 16% | 8% | 20% |
+| express (mocha, 29) | 31% | 3% | 24% | 41% |
+| cobra (go, 30) | 13% | 13% | 30% | 43% |
+| click (pytest, 30) | 3% | 70% | 10% | 17% |
 
-Median run: **1 second** on top of the job's existing test run.
+Don't chase the proven rate. Precision is the thing worth having, so every
+pull request postflight accused across all four projects was read by hand —
+and the pattern is uncomfortable:
 
-That one "not proven" is the honest part. It was a pull request whose source
-change turned out to be **pure JSDoc** — the added test passed on base because
-no behaviour had changed. The verdict was accurate, and blocking it would
-still have been wrong.
+| Project | The accusation | Why the test really passes on base |
+|---|---|---|
+| gson | "Avoid quadratic removeIf in JsonArray" | **performance** — no unit test can observe asymptotic complexity |
+| gson | "Remove redundant recordPromotedName calls" | a refactor; nothing observable changed |
+| gson | "Bump Error Prone and fix new warnings" | tooling |
+| cobra | "Add tests for funcs in cobra.go" | the PR's **stated purpose** is covering existing code |
+| cobra | "Add tests for flag completion registration" | likewise |
+| click | "Close the pager temp file before unlinking" | a **Windows-only** bug; Linux lets you unlink an open file |
+| express | "enhance req.acceptsCharsets" | the entire source change was JSDoc |
 
-That is why `on-green` defaults to `warn`. Writing a test for behaviour that
-already works is normal and good practice, and from here it is indistinguishable
-from failing to test a fix. Only the author knows which it is.
+Every one of those verdicts is *accurate*. Almost none of them is something
+the author should have done differently.
 
-Getting to those numbers took three fixes that only real history exposed:
+**That is why `on-green` defaults to `warn`, and why raising the proven rate
+would be the wrong goal.** postflight can tell you a test doesn't capture your
+change; it cannot tell you whether that matters. A performance fix, a
+platform-specific bug, a refactor and a deliberate characterization test all
+look identical from here, and only you know which you have — hence the
+[marker](#when-a-test-is-deliberately-covering-what-already-works).
+
+Median run: **1 second** on top of the job's existing test run for express and
+click; a Go or Java project pays its compile phase instead.
+
+Every one of those projects found a bug that the unit tests had not. A sample:
 
 - **Mocha output was unrecognised.** `/\bFAIL\b/` does not match `1 failing`,
-  so genuine assertion failures were reported as inconclusive. Emit JUnit XML
-  and the guessing stops — which is why the docs lead with it.
-- **Renamed tests were counted as new.** A commit fixing a typo in a test
-  title was reported as "not proven". Net counting fixed it.
-- **Refactors and deletions were reported as findings.** Nine of 24 commits
-  asserted nothing new; they are now silent.
+  so genuine assertion failures were reported as inconclusive.
+- **Renamed tests counted as new**, so a typo fix in a test title was reported
+  as "not proven". Counting is net now.
+- **vitest reported false proof.** A missing import becomes
+  `TypeError: … is not a function`, with `errors="0"` in the report.
+- **Narrowing filters were never shell-quoted**, so Go hit a bash syntax error
+  on every project and the JS runners piped their output into a nonexistent
+  command whenever a test name had no spaces.
+- **maven's filter was a hard error.** Surefire takes class patterns, not bare
+  method names, so narrowing fell back on all 25 commits.
+
+The full log, including the dead ends, is in
+[`bench/FINDINGS.md`](bench/FINDINGS.md).
 
 ## Configuration
 
@@ -283,7 +343,9 @@ failures in runners they were not written for.
 Worth knowing before you turn it on:
 
 - **Flaky tests produce false "proven".** A test that fails intermittently
-  fails on base too, and postflight can't tell that from real evidence.
+  fails on base too. postflight re-runs a result before standing behind it,
+  which reduces this but cannot remove it — see [tests that
+  sample](#tests-that-sample-quantum-monte-carlo-property-based).
 - **Refactors and docs PRs** have nothing to prove. They report *not
   applicable* rather than passing judgement.
 - **Expensive suites** cost an extra run. Scope `test-command` with `{files}`
@@ -294,7 +356,14 @@ Worth knowing before you turn it on:
 - **It can only prove what the CI platform can observe.** A fix for a
   Windows-specific bug cannot fail on a Linux runner however good its test is.
 - **It cannot know intent.** A test added for behaviour that already works
-  looks exactly like a fix with no test. This is why the default is advisory.
+  looks exactly like a fix with no test. This is why the default is advisory,
+  and why you can [mark a
+  test](#when-a-test-is-deliberately-covering-what-already-works).
+- **Performance fixes can't be captured.** No unit test observes asymptotic
+  complexity, so a real optimisation reports *not proven* and there is nothing
+  to do about it.
+- **Monorepos are not scoped yet.** On a multi-module project the detected
+  command runs every module. Set `test-command` to the module you care about.
 - Shallow clones don't work. `fetch-depth: 0`.
 
 ## Related

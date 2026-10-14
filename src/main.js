@@ -9,11 +9,12 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { input, boolInput, listInput, setOutput, summary, log, eventPayload } from './core.js';
 import { DEFAULT_PATTERNS, selectTestFiles, countAddedTestCases } from './detect.js';
-import { extractTestNames, coversAny, hasLoadError } from './cases.js';
+import { extractTestNames, characterizationNames, coversAny, hasLoadError } from './cases.js';
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
 import { analyseDeterminism, confirmationsFor } from './nondeterminism.js';
+import { confirmVerdict, shouldConfirm } from './confirm.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
 import { runTests, collectJUnit } from './run.js';
 import { classify, OUTCOME } from './classify.js';
@@ -98,11 +99,20 @@ async function main() {
   // between a useful finding and three accusations against innocent commits.
   const { added, removed } = await changedLines(baseSha, headSha, files);
   const newCases = countAddedTestCases(added, removed);
-  const addedNames = extractTestNames(added);
+  const allAddedNames = extractTestNames(added);
+
+  // The author can say a test is deliberately characterizing behaviour that
+  // already works, which no analysis can tell from an untested fix. Marked
+  // cases are excluded from the verdict but always REPORTED — a marker that
+  // hides the check would be a hole in the check.
+  const marked = characterizationNames(added);
+  const addedNames = allAddedNames.filter((n) => !marked.includes(n));
+
   log.info(`New test cases added: ${newCases}`);
-  if (addedNames.length) {
+  if (allAddedNames.length) {
     log.group('Cases this pull request adds', () =>
-      addedNames.forEach((n) => log.info(`  ${n}`)));
+      allAddedNames.forEach((n) =>
+        log.info(`  ${n}${marked.includes(n) ? '   [characterization]' : ''}`)));
   }
   if (newCases === 0) {
     return finish({
@@ -111,6 +121,21 @@ async function main() {
       files,
       baseSha,
       headSha,
+    });
+  }
+
+  // Everything this pull request adds is marked, so there is nothing left to
+  // judge. Said plainly rather than reported as a pass, and the names are
+  // listed so the marker is visible to a reviewer.
+  if (addedNames.length === 0 && marked.length > 0) {
+    log.info(`All ${marked.length} added cases are marked as characterization tests.`);
+    return finish({
+      outcome: OUTCOME.NOT_APPLICABLE,
+      reason: 'characterization',
+      files,
+      baseSha,
+      headSha,
+      marked,
     });
   }
 
@@ -165,12 +190,20 @@ async function main() {
     let startedAt = Date.now();
     let run = null;
     let report = null;
+    // Which command actually produced the verdict. Confirming has to repeat
+    // THAT one: when the narrowed run matched nothing and fell back, the
+    // verdict came from the whole-file run, and re-running the narrowed
+    // command would compare two different things and call the difference
+    // "not reproducible". Measured on cobra, that mislabelled 4 of 30 real
+    // commits before this was tracked.
+    let verdictCommand = null;
 
     if (narrowing) {
       log.info(`Running this pull request's ${addedNames.length} added ` +
         `${addedNames.length === 1 ? 'case' : 'cases'} against base ${baseSha.slice(0, 8)}…`);
       run = await runTests({ command: narrowing, files: built.overlaid, cwd: built.worktree });
       report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+      verdictCommand = narrowing;
     }
 
     // A filter that matched nothing must never stand in for a verdict. Name
@@ -200,6 +233,7 @@ async function main() {
       // that writes JUnit has its report collected. Either way the result
       // arrives in the same shape and nothing downstream cares which.
       report = await readReport(runner, run, built.worktree, junitPaths, startedAt);
+      verdictCommand = testCommand;
     }
 
     let verdict = classify(run, report, addedNames);
@@ -324,37 +358,26 @@ async function main() {
     // asymmetry impossible to miss; it was always there.
     const configured = Math.max(0, parseInt(input('confirmations', '1'), 10) || 0);
     const confirmations = confirmationsFor(determinism.risk, configured);
-    const confirmable = verdict.outcome === OUTCOME.RED
-      || (verdict.outcome === OUTCOME.GREEN_ON_BASE && determinism.risk === 'unseeded');
 
-    if (confirmable && confirmations > 0) {
-      const expected = verdict.outcome;
-      for (let i = 1; i <= confirmations; i++) {
-        log.info(`Confirming the result is reproducible (${i}/${confirmations})…`);
-        const again = await runTests({
-          command: narrowing || testCommand,
-          files: built.overlaid,
-          cwd: built.worktree,
-          echo: false,
-        });
-        const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
-        const repeat = classify(again, againReport, addedNames);
-        if (repeat.outcome !== expected) {
-          log.warn(`The base result did not reproduce (${expected} then ${repeat.outcome}).`);
-          verdict = {
-            outcome: OUTCOME.INCONCLUSIVE,
-            reason: 'not-reproducible',
-            evidence:
-              `The tests reported ${expected} against base on the first run and ` +
-              `${repeat.outcome} on a repeat. A result that does not reproduce is ` +
-              'not evidence either way, in either direction.',
-          };
-          break;
-        }
-      }
+    if (shouldConfirm(verdict.outcome, determinism.risk)) {
+      verdict = await confirmVerdict({
+        verdict,
+        // The command that PRODUCED this verdict, which after a fallback is
+        // not the narrowed one. Passing it explicitly is the point.
+        command: verdictCommand,
+        confirmations,
+        log,
+        rerun: async (command) => {
+          const again = await runTests({
+            command, files: built.overlaid, cwd: built.worktree, echo: false,
+          });
+          const againReport = await readReport(runner, again, built.worktree, junitPaths, startedAt);
+          return classify(again, againReport, addedNames);
+        },
+      });
     }
 
-    verdict = { ...verdict, determinism };
+    verdict = { ...verdict, determinism, marked };
 
     return finish({
       ...verdict,

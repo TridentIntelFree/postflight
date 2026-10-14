@@ -44,13 +44,23 @@ const FUNCTION_NAME =
  * Order is preserved and duplicates are dropped.
  */
 export function extractTestNames(addedLines) {
+  return scanTestNames(addedLines).map((d) => d.name);
+}
+
+/**
+ * The same scan, keeping which line each name was declared on.
+ *
+ * Marker comments need the line numbers; the verdict only needs the names.
+ * One scanner serves both so they cannot drift apart.
+ */
+export function scanTestNames(addedLines) {
   const names = [];
   const seen = new Set();
-  const push = (n) => {
+  const push = (n, line) => {
     const name = (n || '').trim();
     if (!name || seen.has(name)) return;
     seen.add(name);
-    names.push(name);
+    names.push({ name, line });
   };
 
   for (let i = 0; i < addedLines.length; i++) {
@@ -59,13 +69,13 @@ export function extractTestNames(addedLines) {
     let matched = false;
     for (const re of INLINE_NAME) {
       const m = line.match(re);
-      if (m) { push(m[2]); matched = true; break; }
+      if (m) { push(m[2], i); matched = true; break; }
     }
     if (matched) continue;
 
     for (const re of DECLARED_NAME) {
       const m = line.match(re);
-      if (m) { push(m[1]); matched = true; break; }
+      if (m) { push(m[1], i); matched = true; break; }
     }
     if (matched) continue;
 
@@ -74,7 +84,7 @@ export function extractTestNames(addedLines) {
     if (ANNOTATIONS.some((re) => re.test(line))) {
       for (let j = i + 1; j < Math.min(i + 5, addedLines.length); j++) {
         const m = addedLines[j].match(FUNCTION_NAME);
-        if (m) { push(m[1]); break; }
+        if (m) { push(m[1], j); break; }
       }
     }
   }
@@ -82,7 +92,13 @@ export function extractTestNames(addedLines) {
   return names;
 }
 
-const normalise = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+// The empty parameter list is a JUnit 5 display name, not part of the name:
+// Gradle reports `moduloIsNonNegative()` where the diff says
+// `moduloIsNonNegative`, and surefire reports the same method without it.
+// Without this the two only correspond through the weak substring path,
+// which is the one that can pair the wrong case with the wrong name.
+const normalise = (s) =>
+  s.toLowerCase().replace(/\(\s*\)$/, '').replace(/\s+/g, ' ').trim();
 
 /**
  * How well does a reported case correspond to a name taken from the diff?
@@ -200,4 +216,62 @@ export function coversAny(cases, addedNames) {
 /** Did a test never execute, as opposed to executing and failing? */
 export function hasLoadError(cases) {
   return cases.some((c) => c.type === 'error');
+}
+
+/**
+ * Test cases the author has marked as characterization tests.
+ *
+ * The intent problem cannot be solved by analysis. A test written for
+ * behaviour that already worked is indistinguishable from an untested fix —
+ * measured on cobra, **two of its four accusations are pull requests whose
+ * stated purpose is adding tests for code that already works** ("Add tests
+ * for funcs in cobra.go", "Add tests for flag completion registration").
+ * `green-on-base` is accurate for both and blocking either would be wrong.
+ *
+ * But the author knows which it is, so let them say:
+ *
+ *     // postflight: characterization
+ *     test('divides evenly', () => { … })
+ *
+ * The marker is read from the lines the pull request ADDS, so it has to be
+ * part of the change — an existing marker elsewhere in the file cannot
+ * silence a new test.
+ *
+ * It applies to the nearest declaration within three lines, which covers the
+ * three places people actually write it: above the test, on the same line,
+ * or as the first line of the body. Ties go forward, since above is
+ * idiomatic.
+ *
+ * Marked cases are reported, never silently dropped. A marker that hides a
+ * check is a hole in the check.
+ */
+const MARKER = /\bpostflight[:\s-]+(?:characterization|characterisation|ignore|skip)\b/i;
+
+export function characterizationNames(addedLines = []) {
+  const declared = scanTestNames(addedLines);
+  if (!declared.length) return [];
+
+  const marked = new Set();
+  for (let i = 0; i < addedLines.length; i++) {
+    if (!MARKER.test(addedLines[i])) continue;
+
+    let best = null;
+    for (const d of declared) {
+      const distance = d.line - i;
+      if (distance < -3 || distance > 3) continue;
+      // Nearest wins; a tie prefers the declaration *after* the marker.
+      if (best === null
+          || Math.abs(distance) < Math.abs(best.line - i)
+          || (Math.abs(distance) === Math.abs(best.line - i) && distance > 0)) {
+        best = d;
+      }
+    }
+    if (best) marked.add(best.name);
+  }
+  return [...marked];
+}
+
+/** Is this line a postflight marker comment? Exposed for the report. */
+export function isMarker(line) {
+  return MARKER.test(line);
 }

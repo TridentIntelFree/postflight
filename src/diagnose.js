@@ -79,6 +79,17 @@ export function missingNames(message = '') {
     /\b(\w+)\)? is not defined/g,                       // JS runtime
     /Cannot read propert(?:y|ies) of undefined \(reading '([^']+)'\)/g,
     /\bundefined: (\w+)/g,                              // Go
+    // Go's compiler reports a method or field the base type lacks, a type
+    // mismatch, and a signature change in three different shapes. All three
+    // turned up in cobra's real history, where the diagnosis came back
+    // "unknown" for tests plainly written against the PR's new API.
+    //   rootCmd.Options.SetDefault undefined (type Options has no ...)
+    /\.(\w+) undefined \(type/g,                        // Go: new method
+    /as (\w+) value/g,                                  // Go: changed type
+    // The dotted prefix is consumed greedily so the capture is the method,
+    // not the receiver: `non-variadic rootCmd.InitDefaultCompletionCmd`.
+    /non-variadic (?:\w+\.)*(\w+)/g,                    // Go: changed signature
+    /unknown field (\w+)/g,                             // Go: new struct field
     /cannot find function [`'"]?(\w+)/g,                // Rust
     /cannot find value [`'"]?(\w+)/g,                   // Rust
     // How cargo actually reports it, which is not either of the above:
@@ -126,6 +137,14 @@ function introducedByPullRequest(name, { addedSourceLines = [], changedFiles = [
     + `|\\b${escape(leaf)}\\s*[:=]\\s*(?:function|\\(|async)`
   );
   if (addedSourceLines.some((l) => declares.test(l))) return true;
+
+  // Go puts the receiver in parentheses between the keyword and the name —
+  // `func (o *Options) SetDefault(d Directive)` — so the pattern above, which
+  // allows only a dotted prefix, does not see a method at all. Found in
+  // cobra's history, where a method the pull request plainly added was
+  // reported as an unrecognised failure.
+  const goMethod = new RegExp(`\\bfunc\\s*\\([^)]*\\)\\s*${escape(leaf)}\\s*[(\\[]`);
+  if (addedSourceLines.some((l) => goMethod.test(l))) return true;
 
   // The C family declares a method with a return type and no keyword at all —
   // `public static int modulo(int a, int b)` — so none of the above sees it.

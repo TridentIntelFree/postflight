@@ -861,3 +861,372 @@ supposed to emit JUnit XML — the exact assumption that was already known to be
 false for node:test, written down in this file, and still repeated. Checking
 runners one at a time as they come up means the tenth is trusted for nine
 releases. Audit the whole table.
+
+---
+
+## 2026-10-13 — a third benchmark repo, and the worst bug yet
+
+Added **cobra** (Go, 30 commits) as a third benchmark. Every previous real bug
+came from meeting a new project or runner, and the `go` parser had only ever
+seen fixtures I wrote myself. It took one run to find two serious bugs and a
+third that made the tool unusable for a large class of projects.
+
+### 1. Narrowing filters were never shell-quoted
+
+`quote()` treated `^ $ ( ) |` as inert. They are not:
+
+```
+go       -run ^(TestAlpha|TestBeta)$      bash: syntax error near `('
+vitest   -t TestAlpha|TestBeta            a pipe into `TestBeta`
+```
+
+**Five of the ten runners** were affected — vitest, jest, mocha, node-test,
+go. And the symptom was not a wrong verdict but a dead one: a pipeline's exit
+status is the last command's 127, so `isCommandUnavailable` fired and
+postflight reported `error (command-unavailable)` on an ordinary pull request.
+
+Demonstrated on a plain vitest repo whose added tests were named
+`rejectsZero` and `alsoRejects`:
+
+```
+before:  verdict: error (command-unavailable)
+after:   verdict: red (assertion) — both cases credited, no fallback
+```
+
+**Go hit this on every single project.** The JS runners hit it whenever the
+added test names contained no spaces — which is why it survived four releases:
+every test name in every lab and every benchmark happened to contain a space,
+so quoting was forced by accident. `test('rejectsZero')` is completely
+ordinary and broke the tool outright.
+
+`test/filters.test.js` now runs every runner's filter through bash with
+single-word names, spaces, an apostrophe, `$(…)`, backticks and `;`, and
+asserts nothing executed. The injection angle is not hypothetical: a test
+title is author-controlled text being pasted into a shell command.
+
+### 2. Confirmation re-ran a different command than the verdict
+
+The verdict can come from the narrowed run or, if the filter matched nothing,
+from the whole-file fallback. Confirmation always re-ran `narrowing ||
+testCommand` — so after a fallback it compared the full run's verdict against
+the narrowed run's, and called the difference "not reproducible".
+
+**4 of 30 cobra commits had a true RED destroyed this way.** Hand-verified:
+`746ef0715` "prevent completions from mutating os.Args" adds
+`TestCompletionDoesNotMutateOsArgs`, which fails on base with
+
+```
+completions_test.go:4127: os.Args[2] was mutated: expected "x", got "--"
+```
+
+— exactly the bug the commit fixes. A true finding, reported as unusable.
+
+Express never exposed it because its fallbacks all landed on `load-error`
+commits, where the verdict is inconclusive either way. It needed a project
+where a fallback and a real failure co-occurred.
+
+### 3. What fixing narrowing then revealed: 30% false accusations
+
+With narrowing actually working, **9 of 30 cobra commits moved from
+`green-on-base` to `inconclusive`.** All nine hand-checked: every one is a
+genuine `build-fail` in the base worktree.
+
+```
+./completions_test.go:2952:27: cannot use userComp (variable of func type
+  UserCompletionTypeHelper) as CompletionFunc value
+```
+
+The commit is "fix CompletionFunc implementation" — it changes a *type*, so
+the head test cannot compile against base. `green-on-base` was telling those
+authors their test proves nothing when it could not even build. **A false
+accusation on 30% of commits in a well-maintained Go project.**
+
+Go is worth singling out here: it compiles the whole package, so a test file
+written against a new API fails to build even when the *test* is fine. Any
+compiled language has this shape.
+
+### 4. Go reports "the base lacks this" in five shapes
+
+All five from cobra's real history, all previously `unknown`:
+
+| Message | Means |
+|---|---|
+| `undefined: NoDuplicateArgs` | new function |
+| `X.SetDefault undefined (type …)` | new method |
+| `cannot use x … as CompletionFunc value` | changed type |
+| `cannot use … in call to non-variadic X` | changed signature |
+| `unknown field X` | new struct field |
+
+Two traps worth recording. The dotted prefix must be consumed **greedily** or
+`non-variadic rootCmd.InitDefault` captures `rootCmd`, which the PR does not
+declare — and the diagnosis then blames a missing dependency. And Go puts the
+receiver in parentheses between keyword and name, `func (o *Options)
+SetDefault(…)`, so the ordinary declaration patterns see no method at all.
+
+After: **every `unknown` on cobra is gone.**
+
+### cobra's distribution, and what the accusations really are
+
+```
+not-applicable        13  (43%)   mostly test-only or doc commits
+references-new-code    8  (27%)   honest "nothing to prove yet"
+red                    4  (13%)   true findings, assertion quoted
+green-on-base          4  (13%)
+missing-dependency     1
+```
+
+The four accusations were read by hand, and **two of them are pull requests
+whose stated purpose is adding tests for code that already works**:
+
+- `0dec88e79` "Add tests for funcs in cobra.go (#2094)"
+- `00b68a1c2` "Add tests for flag completion registration (#2053)"
+
+`green-on-base` is *accurate* for both and blocking either would be wrong.
+That is the strongest evidence yet for roadmap item 4 — a marker letting an
+author say "this is a characterization test" — and it is now 50% of the
+accusations on this repo rather than the single express commit it was before.
+
+### No regressions
+
+express (29) and click (30): **0 verdict and 0 reason differences.** 139
+tests.
+
+
+### A surviving mutation drove a structural fix
+
+Mutating the confirmation to re-run the wrong command **survived the whole
+suite** — because the logic lived inside `main()`, where nothing could import
+it and therefore nothing could test it. That is the same shape as the
+`coversAny`/`hasLoadError` problem recorded above, and the same answer:
+`src/confirm.js` now holds `confirmVerdict()` and `shouldConfirm()`, taking
+the command and an injected `rerun` callback so a test can assert *which*
+command was used.
+
+Four mutations of it are now caught, including the one that survived. Two are
+in CI.
+
+The injection test earned its keep immediately: mutating `quote()` to return
+its argument unchanged really did create `/tmp/postflight-pwned`, which is how
+the leftover file was discovered. A test title is author-controlled text being
+pasted into a shell command, and that was not a theoretical concern.
+
+### Final distributions, three repos
+
+```
+cobra (go, 30)       not-applicable 13   inconclusive 9   red 4   green 4
+express (mocha, 29)  not-applicable 12   red 9   inconclusive 7   green 1
+click (pytest, 30)   green 21   not-applicable 5   inconclusive 3   red 1
+```
+
+146 tests, 13 mutations in CI, 0 differences on a repeat run of all three.
+
+### Lesson
+
+**Two benchmark repos were one too few, and the gap was not where I expected.**
+I added cobra to exercise the Go *parser*; the parser was fine. What it found
+was a shell-quoting bug affecting five runners, a confirmation bug affecting
+every fallback, and a 30% false-accusation rate — none of which are
+Go-specific, and all of which two repos in two languages had hidden for four
+releases. The next repo should be in a language with a compiler and a
+different test-naming convention, for the same reason.
+
+---
+
+## 2026-10-13 — the characterization marker (roadmap item 4)
+
+Built because the cobra audit gave it evidence it did not have before. Two of
+that repo's four accusations are pull requests whose **stated purpose** is
+adding tests for code that already works:
+
+- `0dec88e79` "Add tests for funcs in cobra.go (#2094)"
+- `00b68a1c2` "Add tests for flag completion registration (#2053)"
+
+`green-on-base` is accurate for both, and blocking either would be wrong.
+That is 50% of this repo's accusations, where before it was one express
+commit. The intent problem cannot be solved by analysis — a test written for
+behaviour that already worked is indistinguishable from an untested fix — but
+the author knows, so let them say.
+
+```js
+// postflight: characterization
+test('divides negatives the way it always has', () => { … })
+```
+
+Accepts `characterisation`, `ignore`, `skip`, with `//`, `#`, `--`, `/* */`.
+Applies to the nearest declaration within three lines, covering the three
+places people write it: above, on the same line, first line of the body.
+
+### Two rules that stop it being a hole
+
+- **Read from the lines the pull request ADDS.** An existing marker elsewhere
+  in the file cannot silence a new test; the marker has to be part of the
+  change under review.
+- **Marked cases are always reported**, and the verdict is named
+  `not-applicable (characterization)` rather than dressed up as a pass. A
+  marker that suppresses the check invisibly is worse than no marker, because
+  a reviewer cannot notice what they are not shown.
+
+### Mutation found a gap the tests had papered over
+
+Deleting the ±3 line window **survived the whole suite**. The reason is
+instructive: every test in `markers.test.js` had a declaration close by, so
+"nearest declaration wins" made the window redundant in all of them. The
+property the window actually enforces is different — a marker written
+*anywhere* in the diff, in a docstring or an unrelated comment block, must not
+silence whichever test happens to be closest 20 lines away. Written, caught,
+and added to CI.
+
+That is the third time a passing test in this project turned out not to test
+what it claimed, and the third time mutation caught it rather than reading.
+
+### Verified
+
+End to end on a real node:test repo, both shapes:
+
+| Pull request | Verdict |
+|---|---|
+| real fix + one marked case | `red` — the real case drives it, marked one listed `[characterization]` |
+| two marked cases, nothing else | `✓ not-applicable (characterization)` |
+
+express (29), click (30), cobra (30): **0 verdict and 0 reason differences.**
+154 tests, 14 mutations in CI.
+
+### Note on what this does not do
+
+It does not detect intent, and it should not pretend to. A project that wants
+whole directories exempt still has to mark each case or pass a narrower
+`test-pattern`; a `characterization-paths` input was considered and left out
+rather than shipped untested.
+
+---
+
+## 2026-10-14 — a fourth repo: gson (Java/maven, 25 commits)
+
+Chosen on the stated lesson from cobra: a compiled language with a different
+test-naming convention. This is the first real exercise of the `@Test`
+annotation forward-scan in `extractTestNames`, and of the surefire XML path.
+
+### The highest proven rate of any repo, and it holds up
+
+```
+red             14  (56%)
+not-applicable   5
+green-on-base    4
+inconclusive     2
+```
+
+56% is nearly double express's 31%, so it needed checking rather than
+celebrating. Hand-verified, `8b4b55051` "fix: reject unpaired surrogates in
+strict JSON":
+
+```
+| ✅ | testStrictModeRejectsUnpairedSurrogates | failed — captures the change |
+| ⚠️ | testStrictModeAllowsPairedSurrogates    | passed — proves nothing     |
+
+testStrictModeRejectsUnpairedSurrogates —
+  expected java.io.IOException to be thrown, but nothing was thrown
+```
+
+That is the whole per-case thesis in one table on real history: two tests
+added, one captures the fix and one is a regression guard, and postflight
+says which. gson's rate is high because it is a library whose fixes come with
+tests that genuinely capture them — the rate reflects the project, as click's
+45% not-proven did.
+
+### maven's narrowing filter never worked
+
+`-Dtest=testCompareTo` is a **hard error** from surefire:
+
+```
+No tests matching pattern "testCompareTo" were executed!
+```
+
+Surefire takes class patterns, not bare method names. So for maven, narrowing
+errored on every single project, fell back, and the fallback hid it —
+**25 of 25 commits**. Same shape as the Go quoting bug: a filter that cannot
+match, masked by the safety net built to catch exactly that.
+
+Fixed to `*#method`, which does select a method in any class, plus
+`-Dsurefire.failIfNoSpecifiedTests=false` so a genuine no-match produces an
+empty report and a clean fallback instead of a failure.
+
+**And it buys no speed, which is worth saying plainly:**
+
+| | total time | fallbacks |
+|---|---|---|
+| before | 936s | 25 of 25 |
+| after | 942s | **0 of 25** |
+
+`-Dtest='*#testCompareTo'` runs **4674 of gson's 4677 tests**. The pattern
+barely filters, and maven's cost is dominated by the compile phase regardless.
+Before, the hard error failed fast and the fallback paid for one full run;
+now one run does it. Same arithmetic.
+
+So this is a correctness and cleanliness fix — no alarming error in the log,
+no redundant invocation — and **not** a performance one. Narrowing now helps
+measurably on exactly one of the four benchmark repos (click, 43%).
+
+### gradle was already right
+
+`--tests '*methodName'` genuinely filters: 1 of 2 tests in a controlled lab,
+verified by counting testcases in `build/test-results` rather than trusting
+"BUILD SUCCESSFUL", which is printed either way.
+
+But gradle reports the name as `moduloIsNonNegative()` — a JUnit 5 display
+name — where the diff says `moduloIsNonNegative`. Those corresponded only
+through the **substring** path, scoring ~66, which is the path that can pair
+the wrong case with the wrong name. `normalise()` now drops an empty
+parameter list, so it is an exact match. Surefire strips the parens itself,
+which is why gson never showed this.
+
+### gson's accusations are mostly unfixable, and that is now a pattern
+
+The 4 `green-on-base` commits read by hand:
+
+| commit | why the test passes on base |
+|---|---|
+| "Avoid quadratic removeIf in JsonArray list views" | **performance** — no unit test can observe asymptotic complexity |
+| "Remove redundant recordPromotedName calls" | refactor, no behaviour change |
+| "Bump Error Prone to 2.49.0 and fix new warnings" | tooling |
+| "Make LazilyParsedNumber implement Comparable" | needs a closer look |
+
+Across all four repos the accusations now look like this:
+
+```
+express  JSDoc-only change        (now gated as no-behaviour-change)
+click    Windows-only bug         (the platform cannot observe it)
+cobra    2 test-only-intent PRs   (now markable as characterization)
+gson     performance, refactor, tooling
+```
+
+**`green-on-base` is frequently accurate and unactionable**, for reasons the
+author cannot fix. That is the strongest possible argument for `on-green`
+defaulting to `warn`, which it does, and it is why raising the "proven" rate
+is the wrong goal. The remedy is the marker and honest wording, not a
+different threshold.
+
+### Not fixed: multi-module projects
+
+gson is a Maven aggregator with five modules. Detection yields `mvn -B test`
+at the root, which builds and tests **all** of them — for a change confined
+to one. The benchmark sidesteps it with an explicit `-pl gson`.
+
+That is roadmap item 7 and it is a real gap: on a monorepo, postflight is as
+slow as the whole repo's suite. Left undone deliberately rather than guessed
+at — scoping to the module containing the touched files needs care about
+inter-module dependencies, and a wrong guess would silently test the wrong
+thing.
+
+### No regressions
+
+express (29), click (30), cobra (30), gson (25): **0 verdict and 0 reason
+differences.** 156 tests.
+
+### Lesson
+
+Four repos, four runners, and **every single one found a bug in the narrowing
+filters** — go (shell syntax error), vitest/jest/mocha/node:test (shell
+pipe), cargo (invalid multi-name form), maven (hard error on method names).
+Not one of those was caught by the unit tests, because a filter's only real
+test is a shell and a real runner. `test/filters.test.js` now covers the shell
+half; the runner half still needs a real project each time.

@@ -90,7 +90,11 @@ const RUNNERS = {
   cargo: {
     command: 'cargo test',
     junit: false,
-    filter: (names) => names.join(' '),
+    // `cargo test a b` is a usage error — cargo takes at most one TESTNAME.
+    // Several filters have to go past it to the test binary, which does
+    // accept them. Verified against real cargo; the old form was invalid for
+    // any pull request adding more than one test, which is most of them.
+    filter: (names) => `-- ${names.map(quote).join(' ')}`,
   },
   gradle: {
     // Gradle writes JUnit XML under build/test-results by default.
@@ -101,7 +105,14 @@ const RUNNERS = {
   maven: {
     command: 'mvn -B test',
     junit: 'target/surefire-reports',
-    filter: (names) => `-Dtest=${quote(names.join(','))}`,
+    // Surefire's `-Dtest` takes class patterns, not bare method names, and a
+    // bare one is a HARD ERROR: "No tests matching pattern were executed!".
+    // So narrowing never worked for maven — it errored, then fell back, and
+    // the fallback hid it. `*#method` selects the method in any class, and
+    // the flag turns a genuine no-match into an empty report so the fallback
+    // happens cleanly instead of via a failure. Verified against real maven.
+    filter: (names) => `-Dtest=${quote(names.map((n) => `*#${n}`).join(','))}`
+      + ' -Dsurefire.failIfNoSpecifiedTests=false',
   },
   rspec: {
     // No JUnit without the separate rspec_junit_formatter gem, which cannot
@@ -117,8 +128,27 @@ const RUNNERS = {
   },
 };
 
+/**
+ * Shell-quote a filter argument.
+ *
+ * The allowlist is the set of characters that are genuinely inert to the
+ * shell, and nothing else. It previously included `^ $ ( ) |`, every one of
+ * which the shell acts on — so a filter built from them was emitted raw:
+ *
+ *   go       -run ^(TestAlpha|TestBeta)$      bash: syntax error near `('
+ *   vitest   -t TestAlpha|TestBeta            a pipe into `TestBeta`
+ *
+ * Five of the ten runners were affected, and the symptom was not a wrong
+ * verdict but a dead one: the pipeline's exit status is the last command's
+ * 127, so postflight reported `error (command-unavailable)` on an ordinary
+ * pull request. Go hit it always; the JS runners hit it whenever the added
+ * test names contained no spaces, which is why it survived four releases —
+ * every test name in every lab and benchmark happened to contain a space.
+ */
 function quote(value) {
-  return /^[\w@%+=:,./^$()|-]+$/.test(value) ? value : `'${String(value).replaceAll("'", `'\\''`)}'`;
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${String(value).replaceAll("'", `'\\''`)}'`;
 }
 
 /**

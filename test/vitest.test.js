@@ -102,3 +102,55 @@ test("cargo's unresolved import names the symbol", () => {
   assert.deepEqual(
     missingNames('error[E0432]: unresolved import `cg::modulo`'), ['modulo']);
 });
+
+// Go's compiler reports "the base code does not have what this test wants" in
+// four different shapes, and all four turned up in cobra's real history,
+// where they came back as unrecognised failures. The verdict was already
+// safe; the diagnosis was useless.
+
+test('go: a method the PR adds is recognised through the receiver syntax', () => {
+  // `func (o *Options) SetDefault(...)` puts the receiver between the keyword
+  // and the name, so the ordinary declaration patterns do not see a method.
+  const d = diagnoseLoadError({
+    message: './completions_test.go:4023:28: rootCmd.CompletionOptions.SetDefaultShellCompDirective'
+      + ' undefined (type CompletionOptions has no field or method SetDefaultShellCompDirective)',
+    addedSourceLines: ['func (o *CompletionOptions) SetDefaultShellCompDirective(d ShellCompDirective) {'],
+    changedFiles: ['completions.go', 'completions_test.go'],
+  });
+  assert.equal(d.kind, 'references-new-code');
+  assert.deepEqual(d.names, ['SetDefaultShellCompDirective']);
+});
+
+test('go: a signature change names the method, not the receiver', () => {
+  // The dotted prefix has to be consumed greedily or the capture is
+  // `rootCmd`, which the pull request does not declare — and the diagnosis
+  // then blames a missing dependency.
+  const d = diagnoseLoadError({
+    message: './completions_test.go:3923:5: cannot use ... in call to non-variadic'
+      + ' rootCmd.InitDefaultCompletionCmd',
+    addedSourceLines: ['func (c *Command) InitDefaultCompletionCmd(args ...string) {'],
+    changedFiles: ['completions.go', 'completions_test.go'],
+  });
+  assert.equal(d.kind, 'references-new-code');
+  assert.deepEqual(d.names, ['InitDefaultCompletionCmd']);
+});
+
+test('go: a changed type is recognised from the mismatch message', () => {
+  const d = diagnoseLoadError({
+    message: './completions_test.go:2952:27: cannot use userComp (variable of func type'
+      + ' UserCompletionTypeHelper) as CompletionFunc value in variable declaration',
+    addedSourceLines: ['type CompletionFunc = func(cmd *Command, args []string) ([]Completion, ShellCompDirective)'],
+    changedFiles: ['completions.go', 'completions_test.go'],
+  });
+  assert.equal(d.kind, 'references-new-code');
+  assert.deepEqual(d.names, ['CompletionFunc']);
+});
+
+test('go: a plain new function still works', () => {
+  const d = diagnoseLoadError({
+    message: './args_test.go:10:2: undefined: NoDuplicateArgs',
+    addedSourceLines: ['func NoDuplicateArgs(cmd *Command, args []string) error {'],
+    changedFiles: ['args.go', 'args_test.go'],
+  });
+  assert.equal(d.kind, 'references-new-code');
+});
