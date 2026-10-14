@@ -121,6 +121,10 @@ export function scoreMatch(name, c) {
   if (cn.startsWith(`${n}[`)) return 90;
   // mocha suite prefixing: "calc > divides cleanly"
   if (cn.endsWith(` ${n}`) || cn.endsWith(`> ${n}`)) return 85;
+  // Rust and Go report a module path: `tests::clamps_negatives_to_zero`,
+  // `TestOuter/sub_case`. Without this they correspond only by substring,
+  // which is the path that can pair the wrong case with the wrong name.
+  if (cn.endsWith(`::${n}`) || cn.endsWith(`/${n}`)) return 85;
   if (full.endsWith(` ${n}`)) return 80;
 
   // Substring, either direction. Penalised by how much of the longer string

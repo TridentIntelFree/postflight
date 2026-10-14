@@ -1,0 +1,42 @@
+   Compiling rs v0.1.0 (<path>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/rs-ffdf3d4f8e2db1ed)
+
+running 2 tests
+test tests::passes_positives_through ... ok
+test tests::clamps_negatives_to_zero ... FAILED
+
+failures:
+
+---- tests::clamps_negatives_to_zero stdout ----
+
+thread 'tests::clamps_negatives_to_zero' (30132) panicked at src/lib.rs:16:9:
+assertion `left == right` failed
+  left: -5
+ right: 0
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at <rustc>/library/std/src/panicking.rs:689:5
+   1: core::panicking::panic_fmt
+             at <rustc>/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+             at <rustc>/library/core/src/panicking.rs:439:17
+   3: core::panicking::assert_failed::<i32, i32>
+             at <rustc>/library/core/src/panicking.rs:394:5
+   4: rs::tests::clamps_negatives_to_zero
+             at ./src/lib.rs:16:9
+   5: rs::tests::clamps_negatives_to_zero::{closure#0}
+             at ./src/lib.rs:15:34
+   6: <rs::tests::clamps_negatives_to_zero::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at <rustc>/library/core/src/ops/function.rs:250:5
+   7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at <rustc>/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    tests::clamps_negatives_to_zero
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `--lib`

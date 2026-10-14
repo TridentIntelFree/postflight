@@ -112,11 +112,12 @@ in the log which applies:
 |---|---|
 | **JUnit XML** — read directly, nothing inferred | vitest\*, mocha, node:test\*, pytest, gradle, maven |
 | **The runner's own structured format** — parsed | jest (`--json`), go (`test -json`), rspec (`--format json`) |
-| **Reading output** — the fragile path | cargo |
+| **The runner's own prose** — strictly formatted, parsed | cargo |
 
-Only the third guesses, and when it recognises nothing it reports
-*inconclusive* rather than picking a side. Claiming proof it doesn't have is
-the one failure this tool must not have.
+**No runner guesses any more**, and none falls back to judging a whole file.
+When nothing is recognised, postflight reports *inconclusive* rather than
+picking a side — claiming proof it doesn't have is the one failure this tool
+must not have.
 
 ### When a test is deliberately covering what already works
 
@@ -147,6 +148,27 @@ Two rules keep it honest:
 
 If every case you add is marked, postflight reports ✓ *Characterization
 tests* and stops — plainly, rather than as a pass it did not earn.
+
+### Rust keeps its tests inside the file they test
+
+`#[cfg(test)] mod tests` breaks the central mechanism: postflight proves a
+test by laying the **head** version of the test file over the **base** source,
+but here they are the same file — so overlaying it would bring the fix along
+with the test, and the test would be run against the very change it is meant
+to be judging.
+
+Before this was handled, a plain Rust crate with a real fix and a new
+`#[test]` reported *no test files* and postflight did nothing at all.
+
+So for a `.rs` file whose diff adds a test, postflight **splices** instead of
+overlaying: head's `#[cfg(test)]` blocks go into base's code, and everything
+outside them stays at base. The test is head's; the code under it is base's.
+
+Brace matching counts rather than pattern-matches, skipping strings, raw
+strings, char literals and both comment forms — including the nested block
+comments Rust allows. Truncating a module mid-function would make the file
+fail to compile, which reads as *"the test could not run against base"*: a
+plausible-looking lie rather than an obvious failure.
 
 ### Tests that sample: quantum, Monte Carlo, property-based
 
@@ -300,10 +322,12 @@ Outputs: `outcome`, `tested-files`, `report`.
 
 ### Examples
 
-**Emit JUnit XML wherever your runner can.** It is the difference between
-reading the verdict and guessing at it: `<failure>` versus `<error>` is exactly
-the assertion-vs-never-ran distinction, and output heuristics miss real
-failures in runners they were not written for.
+**Emit JUnit XML wherever your runner can.** `<failure>` versus `<error>` is
+exactly the assertion-vs-never-ran distinction, so a report is read rather
+than interpreted. Each of the ten runners is handled specifically — none is
+left to generic pattern-matching — but a runner postflight has never met
+falls back to reading output, and that is the path that has broken on first
+contact every single time.
 
 ```yaml
 # Python

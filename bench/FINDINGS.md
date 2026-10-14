@@ -1230,3 +1230,117 @@ pipe), cargo (invalid multi-name form), maven (hard error on method names).
 Not one of those was caught by the unit tests, because a filter's only real
 test is a shell and a real runner. `test/filters.test.js` now covers the shell
 half; the runner half still needs a real project each time.
+
+---
+
+## 2026-10-14 — Rust: tests that live inside the file they test
+
+### First, a negative result on monorepo scoping
+
+Started on roadmap item 7 and stopped after measuring, which is the right
+order. The hypothesis was that an unscoped command on a multi-module project
+would produce false verdicts: gson's `mvn -B test` at the root **does** fail,
+with a `COMPILATION ERROR` in `test-jpms`, a module no author in the benchmark
+touched. `cannot find symbol` is a load-error marker, so that should have
+read as "your test could not run".
+
+**It did not.** The verdict was a correct `red (assertion)`, because maven
+runs `gson` first in the reactor, its surefire report exists, and the per-case
+path takes precedence over anything the output says. The per-case work from
+PR #3 is load-bearing in a way I had not appreciated.
+
+So the measured cost of not scoping is 15s versus 12s on gson — 20%, on a repo
+whose sibling modules are trivial. Not nothing, but not evidence either, and I
+have no large monorepo to measure properly. **Left unbuilt**, with the
+reasoning recorded so the next session does not redo the measurement.
+
+### The real find: postflight did nothing at all for most Rust projects
+
+A plain crate, a real fix, a new `#[test]`:
+
+```
+verdict: not-applicable (no-test-files)
+```
+
+Rust puts unit tests **inside the source file**, in `#[cfg(test)] mod tests`.
+Only integration tests under `tests/` were ever recognised, so the majority of
+Rust pull requests were silently skipped.
+
+And the obvious fix is wrong. Overlaying head's `src/lib.rs` onto base brings
+**the fix along with the test**, so the test runs against the very change it
+is meant to be judging — every verdict a lie in the most flattering direction.
+
+So postflight splices: head's `#[cfg(test)]` blocks go into base's code,
+everything outside them stays at base. The test is head's; the code under it
+is base's. A `.rs` file counts as a test file when its diff adds a test,
+rather than by path, because the path cannot tell.
+
+Brace matching counts rather than pattern-matches, skipping strings, raw
+strings, char literals (distinguished from lifetimes) and both comment forms,
+including the nested block comments Rust allows.
+
+Verified end to end on four shapes:
+
+| Pull request | Verdict |
+|---|---|
+| real fix + inline test that captures it | `red (assertion)`, per-case |
+| inline test that passes on base | `green-on-base` |
+| inline test for a brand-new function | `inconclusive (references-new-code)` |
+| comment-only change | `not-applicable` |
+
+The second one matters most: it proves the splice is not simply breaking the
+build to manufacture a red.
+
+### cargo was the last runner judging whole files
+
+Not just "on heuristics" — without per-case results the verdict falls back to
+FILE level, and file-level scoring was measured over-crediting **24% of pull
+requests** on click. cargo users were getting the known-wrong scoring.
+
+libtest's `--format json` needs `-Z unstable-options` (nightly), but its prose
+is strictly formatted, and **Rust separates the two cases more cleanly than
+any other runner**: if the code a test reaches for is absent, the crate does
+not compile. So a panic always means the test ran and disagreed; a compile
+error always means it never ran. No ambiguity of the kind that bit node:test,
+vitest and rspec.
+
+Also added: `::` and `/` as name separators in `scoreMatch`. cargo reports
+`tests::clamps_negatives_to_zero` and Go reports `TestOuter/sub_case`, and
+both previously corresponded to the diff's bare name only by **substring** —
+the path that can pair the wrong case with the wrong name.
+
+### A fourth test that did not test what it claimed
+
+"braces inside strings do not truncate the module" **passed against
+deliberately broken brace matching.** It asserted that the captured text ended
+in `}` and contained the assertion — both true of a block truncated at the
+inner function's closing brace, because a `}` is a `}`.
+
+Rewritten with a sentinel test *after* the tricky code and before the module's
+brace, plus an exact offset assertion. Then two more mutations survived and
+both were my fixture's fault, not the code's:
+
+- the raw string had **balanced** braces, so not skipping it changed nothing;
+- a raw string only needs its own handling when it contains a **quote**,
+  otherwise the ordinary string skip covers it by accident.
+
+Fixture now uses `r#"a quote " then } } } unbalanced"#` and a nested comment
+with unbalanced braces. All four branches — strings, raw strings, block
+comments, nested block comments — are now genuinely caught.
+
+**Fourth occurrence in this project of a passing test that tested nothing, and
+the fourth caught by mutation rather than by reading.** The pattern is always
+the same: the assertion is true for both the correct and the broken behaviour.
+
+### One consequence worth recording
+
+A file carrying its own tests is both test *and* source, and the diagnosis
+initially lost sight of that: a Rust pull request adding a function plus an
+inline test for it was blamed on a missing dependency, because the file was
+classed as a test and excluded from the source diff. Inline files now count
+as both.
+
+### Verified
+
+express (29), click (30), cobra (30), gson (25): **0 verdict and 0 reason
+differences.** 174 tests, 17 mutations in CI.

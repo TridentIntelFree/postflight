@@ -13,6 +13,7 @@ import { extractTestNames, characterizationNames, coversAny, hasLoadError } from
 import { toCases } from './junit.js';
 import { detectRunner } from './runners.js';
 import { diagnoseLoadError, isDependencyFile } from './diagnose.js';
+import { addsInlineTests } from './inline.js';
 import { analyseDeterminism, confirmationsFor } from './nondeterminism.js';
 import { confirmVerdict, shouldConfirm } from './confirm.js';
 import { assertHistory, changedFiles, changedLines, buildBaseWorktree } from './worktree.js';
@@ -79,6 +80,23 @@ async function main() {
   const patterns = listInput('test-pattern', DEFAULT_PATTERNS);
   const changed = await changedFiles(baseSha, headSha);
   const files = selectTestFiles(changed, patterns);
+
+  // Rust keeps unit tests inside the file they test, so a path pattern can
+  // never find them: measured on a plain crate with a real fix and a new
+  // #[test], postflight reported `no-test-files` and did nothing at all.
+  // A changed source file counts when the DIFF adds a test to it, and it is
+  // spliced rather than overlaid so the fix stays at base. See src/inline.js.
+  const inlineFiles = [];
+  for (const file of changed) {
+    if (files.includes(file) || !/\.rs$/.test(file)) continue;
+    const { added: lines } = await changedLines(baseSha, headSha, [file]);
+    if (addsInlineTests(lines)) inlineFiles.push(file);
+  }
+  if (inlineFiles.length) {
+    files.push(...inlineFiles);
+    files.sort();
+    log.info(`Files carrying their own tests: ${inlineFiles.join(', ')}`);
+  }
 
   log.info(`Changed files: ${changed.length}; test files: ${files.length}`);
   if (files.length === 0) {
@@ -162,6 +180,7 @@ async function main() {
     baseSha,
     headSha,
     testFiles: files,
+    inlineFiles,
     linkPaths: listInput('link-paths', ['node_modules', '.venv', 'venv', 'vendor']),
   });
 
@@ -257,7 +276,13 @@ async function main() {
     let addedSourceLines = [];
     let dependencyDiff = [];
     if (needsSourceContext) {
-      const plainSource = changed.filter((f) => !files.includes(f) && !isDependencyFile(f));
+      // A file that carries its own tests is BOTH test and source, so it
+      // counts here too. Without this, a Rust pull request adding a function
+      // and an inline test for it had no visible source change at all, and
+      // the diagnosis blamed a missing dependency for a function the pull
+      // request plainly added.
+      const plainSource = changed.filter((f) =>
+        (!files.includes(f) || inlineFiles.includes(f)) && !isDependencyFile(f));
       if (plainSource.length) {
         addedSourceLines = (await changedLines(baseSha, headSha, plainSource)).added;
       }

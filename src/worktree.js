@@ -6,6 +6,7 @@
 // someone's workspace on the wrong commit, and a failure mid-way is cleaned
 // up by removing one directory.
 
+import { spliceTestBlocks } from './inline.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, symlink, rm, access } from 'node:fs/promises';
@@ -84,6 +85,7 @@ export async function buildBaseWorktree({
   baseSha,
   headSha,
   testFiles,
+  inlineFiles = [],
   linkPaths = [],
   cwd = process.cwd(),
 }) {
@@ -105,6 +107,7 @@ export async function buildBaseWorktree({
     // whole checkout fail rather than just that file.
     const overlaid = [];
     const missing = [];
+    const spliced = [];
     for (const file of testFiles) {
       let content;
       try {
@@ -113,6 +116,31 @@ export async function buildBaseWorktree({
         missing.push(file);   // deleted on head: nothing to overlay
         continue;
       }
+
+      // A file that holds its own tests cannot simply be overlaid: head's
+      // copy carries the fix as well as the test, so the test would be run
+      // against the very change it is meant to be judging. Splice head's
+      // test blocks into base's code instead. See src/inline.js.
+      if (inlineFiles.includes(file)) {
+        let baseSource = null;
+        try {
+          baseSource = (await gitShowRaw(baseSha, file, cwd)).toString('utf8');
+        } catch {
+          baseSource = null;   // added by this pull request; nothing at base
+        }
+        if (baseSource !== null) {
+          const merged = spliceTestBlocks(baseSource, content.toString('utf8'));
+          if (merged !== null) {
+            const target = join(worktree, file);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, merged);
+            overlaid.push(file);
+            spliced.push(file);
+            continue;
+          }
+        }
+      }
+
       const target = join(worktree, file);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, content);
@@ -139,7 +167,7 @@ export async function buildBaseWorktree({
       } catch { /* a real copy already there, or no permission: let it be */ }
     }
 
-    return { worktree, cleanup, overlaid, missing, linked };
+    return { worktree, cleanup, overlaid, missing, linked, spliced };
   } catch (err) {
     await cleanup();
     throw err;

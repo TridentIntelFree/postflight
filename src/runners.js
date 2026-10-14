@@ -16,6 +16,7 @@ import { readFile, access } from 'node:fs/promises';
 import { parseGoJson } from './gotest.js';
 import { parseJestJson } from './jestjson.js';
 import { parseRspecJson } from './rspec.js';
+import { parseCargoTest } from './cargotest.js';
 import { join } from 'node:path';
 
 const REPORT = 'postflight-report.xml';
@@ -88,8 +89,13 @@ const RUNNERS = {
     filter: (names) => `-run ${quote(`^(${names.join('|')})$`)}`,
   },
   cargo: {
+    // No stable structured output: libtest's `--format json` needs
+    // `-Z unstable-options`, which is nightly only. Its prose is strictly
+    // formatted though, and Rust separates "did not compile" from "ran and
+    // panicked" more cleanly than any other runner. See src/cargotest.js.
     command: 'cargo test',
     junit: false,
+    parse: parseCargoTest,
     // `cargo test a b` is a usage error — cargo takes at most one TESTNAME.
     // Several filters have to go past it to the test binary, which does
     // accept them. Verified against real cargo; the old form was invalid for

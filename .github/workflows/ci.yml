@@ -147,6 +147,26 @@ jobs:
           sed -i 's|      if (distance < -3 .. distance > 3) continue;||' src/cases.js
           expect_failure "characterization marker leaks to distant tests" src/cases.js
 
+          # 15. the inline-test splice bringing head's whole file across.
+          #     Rust keeps unit tests in the file they test, so overlaying it
+          #     would put the FIX under its own test and every verdict would
+          #     be a lie in the most flattering direction.
+          perl -0pi -e "s|  const tests = headBlocks\\.map.*?\\n|  const tests = String(headSource);\\n|s" src/inline.js
+          expect_failure "splice brings head's whole file" src/inline.js
+
+          # 16. brace matching that stops inside a string. This truncates the
+          #     test module mid-function, the file does not compile, and the
+          #     result reads as "could not run against base" — a
+          #     plausible-looking lie rather than an obvious failure.
+          sed -i "s|      i = skipQuoted(text, i, '\\\"');|      i = i;|" src/inline.js
+          expect_failure "braces inside strings truncate the module" src/inline.js
+
+          # 17. a cargo compile failure read as a real test failure. Rust
+          #     separates these cleanly — if the code is absent the crate does
+          #     not compile — so conflating them is pure false credit.
+          sed -i "s|      type: 'error',|      type: 'failure',|" src/cargotest.js
+          expect_failure "cargo compile failure read as proof" src/cargotest.js
+
           echo "All mutations applied and were caught."
 
       - name: Working tree restored
