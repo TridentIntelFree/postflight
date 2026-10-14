@@ -105,7 +105,14 @@ const RUNNERS = {
   maven: {
     command: 'mvn -B test',
     junit: 'target/surefire-reports',
-    filter: (names) => `-Dtest=${quote(names.join(','))}`,
+    // Surefire's `-Dtest` takes class patterns, not bare method names, and a
+    // bare one is a HARD ERROR: "No tests matching pattern were executed!".
+    // So narrowing never worked for maven — it errored, then fell back, and
+    // the fallback hid it. `*#method` selects the method in any class, and
+    // the flag turns a genuine no-match into an empty report so the fallback
+    // happens cleanly instead of via a failure. Verified against real maven.
+    filter: (names) => `-Dtest=${quote(names.map((n) => `*#${n}`).join(','))}`
+      + ' -Dsurefire.failIfNoSpecifiedTests=false',
   },
   rspec: {
     // No JUnit without the separate rspec_junit_formatter gem, which cannot

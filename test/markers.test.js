@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { characterizationNames, extractTestNames } from '../src/cases.js';
+import { characterizationNames, extractTestNames, scoreMatch } from '../src/cases.js';
 
 // The intent problem cannot be solved by analysis: a test written for
 // behaviour that already works is indistinguishable from an untested fix.
@@ -117,4 +117,14 @@ test('a marker far from any test does not reach the nearest one', () => {
   assert.deepEqual(characterizationNames(lines), [],
     'a marker 21 lines from a test marks nothing');
   assert.deepEqual(extractTestNames(lines), ['captures the fix']);
+});
+
+test('a JUnit 5 display name corresponds to the bare method name', () => {
+  // Gradle reports `moduloIsNonNegative()`; the diff says
+  // `moduloIsNonNegative`. Without normalising the empty parameter list the
+  // two only correspond through the substring path, which is the one that can
+  // pair the wrong case with the wrong name.
+  assert.equal(
+    scoreMatch('moduloIsNonNegative', { name: 'moduloIsNonNegative()', classname: 'app.CalcTest' }),
+    100);
 });

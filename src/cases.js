@@ -92,7 +92,13 @@ export function scanTestNames(addedLines) {
   return names;
 }
 
-const normalise = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+// The empty parameter list is a JUnit 5 display name, not part of the name:
+// Gradle reports `moduloIsNonNegative()` where the diff says
+// `moduloIsNonNegative`, and surefire reports the same method without it.
+// Without this the two only correspond through the weak substring path,
+// which is the one that can pair the wrong case with the wrong name.
+const normalise = (s) =>
+  s.toLowerCase().replace(/\(\s*\)$/, '').replace(/\s+/g, ' ').trim();
 
 /**
  * How well does a reported case correspond to a name taken from the diff?

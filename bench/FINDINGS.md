@@ -1097,3 +1097,136 @@ It does not detect intent, and it should not pretend to. A project that wants
 whole directories exempt still has to mark each case or pass a narrower
 `test-pattern`; a `characterization-paths` input was considered and left out
 rather than shipped untested.
+
+---
+
+## 2026-10-14 — a fourth repo: gson (Java/maven, 25 commits)
+
+Chosen on the stated lesson from cobra: a compiled language with a different
+test-naming convention. This is the first real exercise of the `@Test`
+annotation forward-scan in `extractTestNames`, and of the surefire XML path.
+
+### The highest proven rate of any repo, and it holds up
+
+```
+red             14  (56%)
+not-applicable   5
+green-on-base    4
+inconclusive     2
+```
+
+56% is nearly double express's 31%, so it needed checking rather than
+celebrating. Hand-verified, `8b4b55051` "fix: reject unpaired surrogates in
+strict JSON":
+
+```
+| ✅ | testStrictModeRejectsUnpairedSurrogates | failed — captures the change |
+| ⚠️ | testStrictModeAllowsPairedSurrogates    | passed — proves nothing     |
+
+testStrictModeRejectsUnpairedSurrogates —
+  expected java.io.IOException to be thrown, but nothing was thrown
+```
+
+That is the whole per-case thesis in one table on real history: two tests
+added, one captures the fix and one is a regression guard, and postflight
+says which. gson's rate is high because it is a library whose fixes come with
+tests that genuinely capture them — the rate reflects the project, as click's
+45% not-proven did.
+
+### maven's narrowing filter never worked
+
+`-Dtest=testCompareTo` is a **hard error** from surefire:
+
+```
+No tests matching pattern "testCompareTo" were executed!
+```
+
+Surefire takes class patterns, not bare method names. So for maven, narrowing
+errored on every single project, fell back, and the fallback hid it —
+**25 of 25 commits**. Same shape as the Go quoting bug: a filter that cannot
+match, masked by the safety net built to catch exactly that.
+
+Fixed to `*#method`, which does select a method in any class, plus
+`-Dsurefire.failIfNoSpecifiedTests=false` so a genuine no-match produces an
+empty report and a clean fallback instead of a failure.
+
+**And it buys no speed, which is worth saying plainly:**
+
+| | total time | fallbacks |
+|---|---|---|
+| before | 936s | 25 of 25 |
+| after | 942s | **0 of 25** |
+
+`-Dtest='*#testCompareTo'` runs **4674 of gson's 4677 tests**. The pattern
+barely filters, and maven's cost is dominated by the compile phase regardless.
+Before, the hard error failed fast and the fallback paid for one full run;
+now one run does it. Same arithmetic.
+
+So this is a correctness and cleanliness fix — no alarming error in the log,
+no redundant invocation — and **not** a performance one. Narrowing now helps
+measurably on exactly one of the four benchmark repos (click, 43%).
+
+### gradle was already right
+
+`--tests '*methodName'` genuinely filters: 1 of 2 tests in a controlled lab,
+verified by counting testcases in `build/test-results` rather than trusting
+"BUILD SUCCESSFUL", which is printed either way.
+
+But gradle reports the name as `moduloIsNonNegative()` — a JUnit 5 display
+name — where the diff says `moduloIsNonNegative`. Those corresponded only
+through the **substring** path, scoring ~66, which is the path that can pair
+the wrong case with the wrong name. `normalise()` now drops an empty
+parameter list, so it is an exact match. Surefire strips the parens itself,
+which is why gson never showed this.
+
+### gson's accusations are mostly unfixable, and that is now a pattern
+
+The 4 `green-on-base` commits read by hand:
+
+| commit | why the test passes on base |
+|---|---|
+| "Avoid quadratic removeIf in JsonArray list views" | **performance** — no unit test can observe asymptotic complexity |
+| "Remove redundant recordPromotedName calls" | refactor, no behaviour change |
+| "Bump Error Prone to 2.49.0 and fix new warnings" | tooling |
+| "Make LazilyParsedNumber implement Comparable" | needs a closer look |
+
+Across all four repos the accusations now look like this:
+
+```
+express  JSDoc-only change        (now gated as no-behaviour-change)
+click    Windows-only bug         (the platform cannot observe it)
+cobra    2 test-only-intent PRs   (now markable as characterization)
+gson     performance, refactor, tooling
+```
+
+**`green-on-base` is frequently accurate and unactionable**, for reasons the
+author cannot fix. That is the strongest possible argument for `on-green`
+defaulting to `warn`, which it does, and it is why raising the "proven" rate
+is the wrong goal. The remedy is the marker and honest wording, not a
+different threshold.
+
+### Not fixed: multi-module projects
+
+gson is a Maven aggregator with five modules. Detection yields `mvn -B test`
+at the root, which builds and tests **all** of them — for a change confined
+to one. The benchmark sidesteps it with an explicit `-pl gson`.
+
+That is roadmap item 7 and it is a real gap: on a monorepo, postflight is as
+slow as the whole repo's suite. Left undone deliberately rather than guessed
+at — scoping to the module containing the touched files needs care about
+inter-module dependencies, and a wrong guess would silently test the wrong
+thing.
+
+### No regressions
+
+express (29), click (30), cobra (30), gson (25): **0 verdict and 0 reason
+differences.** 156 tests.
+
+### Lesson
+
+Four repos, four runners, and **every single one found a bug in the narrowing
+filters** — go (shell syntax error), vitest/jest/mocha/node:test (shell
+pipe), cargo (invalid multi-name form), maven (hard error on method names).
+Not one of those was caught by the unit tests, because a filter's only real
+test is a shell and a real runner. `test/filters.test.js` now covers the shell
+half; the runner half still needs a real project each time.

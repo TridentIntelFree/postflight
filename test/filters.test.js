@@ -88,3 +88,16 @@ test('cargo passes several filters through to the test binary', () => {
   // request adding more than one test, which is most of them.
   assert.equal(RUNNERS.cargo.filter(['alpha', 'beta']), '-- alpha beta');
 });
+
+test('maven filters by method, which surefire will not do with a bare name', () => {
+  // `-Dtest=testCompareTo` is a HARD ERROR from surefire — "No tests matching
+  // pattern were executed!" — so narrowing never worked for maven. It
+  // errored, fell back, and the fallback hid it. Verified against real maven:
+  // `*#method` selects the method in any class and actually filters.
+  const argument = RUNNERS.maven.filter(['testCompareTo', 'testOther']);
+  assert.match(argument, /\*#testCompareTo/);
+  assert.match(argument, /\*#testOther/);
+  // And a genuine no-match must produce an empty report, not a failure, so
+  // the fallback happens cleanly.
+  assert.match(argument, /failIfNoSpecifiedTests=false/);
+});
