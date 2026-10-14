@@ -1,6 +1,0 @@
-{"ImportPath":"gt [gt.test]","Action":"build-output","Output":"# gt [gt.test]\n"}
-{"ImportPath":"gt [gt.test]","Action":"build-output","Output":"./broken_test.go:5:33: undefined: undefinedFunction\n"}
-{"ImportPath":"gt [gt.test]","Action":"build-fail"}
-{"Time":"2026-10-13T13:19:05.604807621Z","Action":"start","Package":"gt"}
-{"Time":"2026-10-13T13:19:05.604837828Z","Action":"output","Package":"gt","Output":"FAIL\tgt [build failed]\n"}
-{"Time":"2026-10-13T13:19:05.60484267Z","Action":"fail","Package":"gt","Elapsed":0,"FailedBuild":"gt [gt.test]"}
